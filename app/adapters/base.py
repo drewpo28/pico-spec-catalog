@@ -18,6 +18,10 @@ class Entry:
     is_dir: bool
     name: str
     size: int = 0
+    # Direct download URL on the source site (when the file need not be mirrored —
+    # the device fetches + unzips it itself). Empty when the source has no stable
+    # direct link (then the static exporter mirrors the bytes instead).
+    url: str = ""
 
 
 class Adapter:

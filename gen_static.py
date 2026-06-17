@@ -78,10 +78,17 @@ def slug(path: str) -> str:
     return "".join(out)
 
 
-def export(adapter: Adapter, outroot: str, *, mirror: bool,
+def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
            max_files: int, max_depth: int) -> int:
-    """BFS the adapter's tree, writing one .tsv per directory (+ mirrored files).
-    Returns the number of files mirrored."""
+    """BFS the adapter's tree, writing one .tsv per directory.
+
+    Per file entry, the 4th (locator) column is chosen as:
+      - `link` and the entry carries a direct URL → that URL (device downloads +
+        unzips it itself; nothing mirrored — tiny Pages, full archive coverage);
+      - else `mirror` within budget → the bytes are fetched/unzipped and written
+        under files/, locator = that static path;
+      - else empty (not available).
+    Returns the number of files mirrored (link-only entries don't count)."""
     site_dir = os.path.join(outroot, adapter.id)
     os.makedirs(site_dir, exist_ok=True)
 
@@ -108,7 +115,9 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool,
                     queue.append(child)
             else:
                 url, size = "", e.size
-                if mirror and (max_files <= 0 or files_done < max_files):
+                if link and getattr(e, "url", ""):
+                    url = e.url  # direct source URL; device downloads + unzips
+                elif mirror and (max_files <= 0 or files_done < max_files):
                     try:
                         data, fname = adapter.fetch(path, e.name)
                         rel = f"files/{slug(path)}/{clean(fname)}"
@@ -138,6 +147,11 @@ def main() -> None:
                     help="mirror file bytes into the tree (default)")
     ap.add_argument("--no-mirror", dest="mirror", action="store_false",
                     help="listings only, no file bytes (F url left empty)")
+    ap.add_argument("--link", dest="link", action="store_true", default=True,
+                    help="emit direct source URLs (device downloads+unzips) when "
+                         "available, instead of mirroring bytes (default)")
+    ap.add_argument("--no-link", dest="link", action="store_false",
+                    help="never emit direct URLs; always mirror within budget")
     ap.add_argument("--max-files", type=int, default=0, help="cap mirrored files (0 = no cap)")
     ap.add_argument("--max-depth", type=int, default=4, help="max directory recursion depth")
     args = ap.parse_args()
@@ -149,7 +163,8 @@ def main() -> None:
     for sid in sites:
         print(f"== exporting {sid} ==")
         a = build_adapter(sid)
-        export(a, args.out, mirror=args.mirror, max_files=args.max_files, max_depth=args.max_depth)
+        export(a, args.out, mirror=args.mirror, link=args.link,
+               max_files=args.max_files, max_depth=args.max_depth)
         manifest.append(f"{a.id}\t{clean(a.name)}")
 
     with open(os.path.join(args.out, "sites.tsv"), "w", encoding="utf-8") as fh:

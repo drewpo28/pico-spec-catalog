@@ -104,7 +104,10 @@ class VtrdAdapter(Adapter):
                 while name in urlmap:
                     name = f"{title} ({stem}) {i}"
                     i += 1
-            entries.append(Entry(False, name, 0))
+            # Carry the direct .zip URL on the entry so the static exporter can emit
+            # a link-only catalog (device downloads + unzips). urlmap stays for the
+            # dynamic /v1 server's fetch().
+            entries.append(Entry(False, name, 0, url=absurl))
             urlmap[name] = absurl
         return entries, urlmap
 
