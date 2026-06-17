@@ -8,12 +8,16 @@ HTML). Listings are cached so repeated browsing doesn't hammer vtrd.in.
 The .trd/.scl files are often inside .zip archives; fetch() transparently
 unpacks the first disk/tape image so the device receives a ready-to-mount file.
 
-NOTE: vtrd.in's exact markup is not part of any documented contract. The CSS
-selectors / URL shapes below are best-effort and MUST be validated against the
-live site (open the relevant page, inspect the anchors) — the surrounding
-caching / unzip / streaming machinery and the /v1 contract are stable. The HTTP
-layer treats an empty listing as "nothing here", so a selector drift degrades
-gracefully rather than crashing.
+URL scheme (validated against the live site 2026-06-17):
+  - games are indexed by first letter via  games.php?t=<x>  where <x> is the
+    lowercase letter a-z, or "123" for the digit/symbol bucket (the site labels
+    it "123"); we expose it as the "0-9" directory.
+  - each game row is a *direct* archive link  /gamez/<letter>/<NAME>.zip  whose
+    anchor text is the human title. There is no game-detail indirection to
+    follow (a release.php?r=<hash> page also exists but is not needed).
+
+The HTTP layer treats an empty listing as "nothing here", so if vtrd ever drifts
+the export degrades gracefully (empty letter) rather than crashing.
 """
 
 from __future__ import annotations
@@ -70,8 +74,9 @@ class VtrdAdapter(Adapter):
         return self._scrape_letter(letter)
 
     def _scrape_letter(self, letter: str) -> tuple[list[Entry], dict[str, str]]:
-        # VALIDATE: games filtered by first letter. Real param shape unconfirmed.
-        url = f"{BASE}/games.php?let={letter}"
+        # The site buckets digits/symbols under "123"; letters are lowercase.
+        t = "123" if letter == "0-9" else letter.lower()
+        url = f"{BASE}/games.php?t={t}"
         entries: list[Entry] = []
         urlmap: dict[str, str] = {}
         try:
@@ -79,21 +84,28 @@ class VtrdAdapter(Adapter):
         except Exception:
             return entries, urlmap
         tree = HTMLParser(html)
-        seen: set[str] = set()
         for a in tree.css("a[href]"):
             href = a.attributes.get("href", "")
-            text = (a.text() or "").strip()
-            if not href or not text:
+            low = href.lower()
+            # Direct archive links only: /gamez/<letter>/<NAME>.zip (or a bare image).
+            if "/gamez/" not in low or not (low.endswith(".zip") or low.endswith(DISK_EXTS)):
                 continue
-            # Game/download anchors: a game detail page or a direct file link.
-            if "game.php" in href or "d.php" in href or href.lower().endswith(DISK_EXTS):
-                name = text if text.lower().endswith(DISK_EXTS) else f"{text}.zip"
-                name = name.replace("/", "_")
-                if name in seen:
-                    continue
-                seen.add(name)
-                entries.append(Entry(False, name, 0))
-                urlmap[name] = href if href.startswith("http") else f"{BASE}/{href.lstrip('/')}"
+            absurl = href if href.startswith("http") else f"{BASE}/{href.lstrip('/')}"
+            base = href.rstrip("/").split("/")[-1]            # e.g. ATAC_SL.zip
+            # Display the human title; fall back to the file name. Titles repeat
+            # (multiple dumps of one game) — disambiguate with the file stem so
+            # every entry maps to exactly one download in urlmap.
+            title = ((a.text() or "").strip() or base).replace("/", "_")
+            name = title
+            if name in urlmap:
+                stem = base.rsplit(".", 1)[0]
+                name = f"{title} ({stem})"
+                i = 2
+                while name in urlmap:
+                    name = f"{title} ({stem}) {i}"
+                    i += 1
+            entries.append(Entry(False, name, 0))
+            urlmap[name] = absurl
         return entries, urlmap
 
     # ── RemoteFs surface ──────────────────────────────────────────────────────
