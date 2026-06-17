@@ -9,7 +9,10 @@ same download/unzip server-side.
 Tree (sections → sub-index → files), validated against the live site 2026-06-17:
   Games/<letter>/         games.php?t=<a..z|123>        → /gamez/<l>/<NAME>.zip
   GS/                     gs.php                        → /gs/<NAME>.zip (+ others)
-  Press/                  press.php?l=1 (A-N) + ?l=2    → /press/<NAME>.zip
+  Press/<letter>/         press.php?l=1 (A-N)+?l=2 (O-Z), bucketed A-Z client-side
+                                                        → /press/<NAME>.zip
+  Demoz/Russian/          russian.php                   → /demoz/demozrus/<NAME>.zip
+  Demoz/Other/            other.php                     → /demoz/demozimp/<NAME>.zip
   Demoz/<year>/<party>/   demos_top.php → party.php?year=Y → demo.php?party=N
                                                         → /demoz/demoz/<NAME>.zip
 Every leaf row is a direct archive link (anchor text = human title); a
@@ -132,6 +135,20 @@ class VtrdAdapter(Adapter):
             entries.append(Entry(True, name, 0))
         return entries
 
+    # ── Press helpers (one flat A-N + O-Z site list, bucketed A-Z client-side) ───
+    def _press_all(self) -> list[Entry]:
+        seen: set[str] = set()
+        return (self._files(f"{BASE}/press.php?l=1", seen=seen) +
+                self._files(f"{BASE}/press.php?l=2", seen=seen))
+
+    def _press_letter(self, letter: str) -> list[Entry]:
+        out: list[Entry] = []
+        for e in self._press_all():
+            c = e.name[:1].upper()
+            if (letter == "0-9" and not c.isalpha()) or c == letter:
+                out.append(e)
+        return out
+
     def _demoz_files(self, year: str, party_name: str) -> list[Entry]:
         pid = None
         for title, i in self._demoz_parties(year):
@@ -160,15 +177,20 @@ class VtrdAdapter(Adapter):
         if sec == "GS":
             return self._files(f"{BASE}/gs.php")
         if sec == "Press":
-            seen: set[str] = set()
-            return (self._files(f"{BASE}/press.php?l=1", seen=seen) +
-                    self._files(f"{BASE}/press.php?l=2", seen=seen))
-        if sec == "Demoz":
             if len(seg) == 1:
-                return self._demoz_years()
-            if len(seg) == 2:
+                return [Entry(True, l, 0) for l in LETTERS]
+            return self._press_letter(seg[1])
+        if sec == "Demoz":
+            if len(seg) == 1:  # Russian/Other curated lists + the by-year parties
+                return ([Entry(True, "Russian", 0), Entry(True, "Other", 0)] +
+                        self._demoz_years())
+            if seg[1] == "Russian":
+                return self._files(f"{BASE}/russian.php")
+            if seg[1] == "Other":
+                return self._files(f"{BASE}/other.php")
+            if len(seg) == 2:  # a year → its parties
                 return self._demoz_party_dirs(seg[1])
-            return self._demoz_files(seg[1], seg[2])
+            return self._demoz_files(seg[1], seg[2])  # year/party → files
         return []
 
     def fetch(self, path: str, name: str) -> tuple[bytes, str]:
