@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+_site/
+# data/files/ holds the committed sample for the `local` source (so CI has
+# something to export). Drop your own .trd/.tap there to grow the local mirror.
