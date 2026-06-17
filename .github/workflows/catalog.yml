@@ -15,6 +15,8 @@
 name: Build catalog (Pages)
 
 on:
+  push:
+    branches: [main]          # rebuild + deploy on every change to the catalog code
   schedule:
     - cron: "17 4 * * *"      # daily, 04:17 UTC
   workflow_dispatch:
