@@ -28,7 +28,7 @@ device just GETs a plain static URL. This is the proxy's /v1/get moved to build
 time — the documented fallback for Cloudflare-hard / archive-packed sites.
 
 Usage:
-    python3 gen_static.py --out ../../_site --site local
+    python3 gen_static.py --out ../../_site --site vtrd
     python3 gen_static.py --out _site --site vtrd --max-files 500 --max-depth 2
 """
 
@@ -42,15 +42,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.adapters.base import Adapter, Entry          # noqa: E402
-from app.adapters.local import LocalAdapter           # noqa: E402
 
 
 def build_adapter(site: str) -> Adapter:
-    """Construct one adapter by id. vtrd is imported lazily so the offline
-    `local` export needs no httpx/selectolax."""
-    if site == "local":
-        return LocalAdapter(os.environ.get("CATALOG_LOCAL_DIR",
-                                           os.path.join(os.path.dirname(__file__), "data", "files")))
+    """Construct one adapter by id."""
     if site == "vtrd":
         from app.adapters.vtrd import VtrdAdapter      # lazy (needs httpx/selectolax)
         return VtrdAdapter()
@@ -142,7 +137,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Static catalog exporter for GitHub Pages")
     ap.add_argument("--out", required=True, help="output root (the Pages site dir)")
     ap.add_argument("--site", action="append", default=[],
-                    help="site id to export (repeatable). Default: local")
+                    help="site id to export (repeatable). Default: vtrd")
     ap.add_argument("--mirror", dest="mirror", action="store_true", default=True,
                     help="mirror file bytes into the tree (default)")
     ap.add_argument("--no-mirror", dest="mirror", action="store_false",
@@ -156,7 +151,7 @@ def main() -> None:
     ap.add_argument("--max-depth", type=int, default=4, help="max directory recursion depth")
     args = ap.parse_args()
 
-    sites = args.site or ["local"]
+    sites = args.site or ["vtrd"]
     os.makedirs(args.out, exist_ok=True)
 
     manifest = []

@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 # Local-mirror files live here (mount a volume to populate). vtrd needs no volume.
-ENV CATALOG_SITES=local,vtrd \
+ENV CATALOG_SITES=vtrd \
     CATALOG_LOCAL_DIR=/data/files
 RUN mkdir -p /data/files
 

@@ -21,13 +21,13 @@ on:
     inputs:
       sites:
         description: "Space-separated site ids to export"
-        default: "local vtrd"
+        default: "vtrd"
       max_files:
         description: "Cap mirrored files per run (0 = unlimited)"
         default: "400"
       max_depth:
-        description: "Max directory recursion depth"
-        default: "2"
+        description: "Max directory recursion depth (Demoz needs >=3: year/party/files)"
+        default: "4"
 
 permissions:
   contents: read
@@ -50,9 +50,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Export static catalog
         env:
-          SITES: ${{ github.event.inputs.sites || 'local vtrd' }}
+          SITES: ${{ github.event.inputs.sites || 'vtrd' }}
           MAX_FILES: ${{ github.event.inputs.max_files || '400' }}
-          MAX_DEPTH: ${{ github.event.inputs.max_depth || '2' }}
+          MAX_DEPTH: ${{ github.event.inputs.max_depth || '4' }}
         run: |
           args=""
           for s in $SITES; do args="$args --site $s"; done
