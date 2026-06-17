@@ -9,8 +9,9 @@ same download/unzip server-side.
 Tree (sections → sub-index → files), validated against the live site 2026-06-17:
   Games/<letter>/         games.php?t=<a..z|123>        → /gamez/<l>/<NAME>.zip
   GS/                     gs.php                        → /gs/<NAME>.zip (+ others)
-  Press/<letter>/         press.php?l=1 (A-N)+?l=2 (O-Z), bucketed A-Z client-side
-                                                        → /press/<NAME>.zip
+  Press/<letter>/<mag>/   press.php?l=1+?l=2; issues grouped by /press/<slug>/ dir,
+                          magazine name from the bold header, bucketed A-Z by name
+                                                        → /press/<slug>/<NAME>.zip
   Demoz/Russian/          russian.php                   → /demoz/demozrus/<NAME>.zip
   Demoz/Other/            other.php                     → /demoz/demozimp/<NAME>.zip
   Demoz/<year>/<party>/   demos_top.php → party.php?year=Y → demo.php?party=N
@@ -54,6 +55,7 @@ class VtrdAdapter(Adapter):
             timeout=20.0, follow_redirects=True,
         )
         self._html_cache: dict[str, tuple[float, str]] = {}  # url -> (expires, text)
+        self._press_idx: tuple[float, list[dict]] | None = None  # (expires, index)
 
     # ── fetching ────────────────────────────────────────────────────────────────
     def _html(self, url: str) -> str:
@@ -135,19 +137,70 @@ class VtrdAdapter(Adapter):
             entries.append(Entry(True, name, 0))
         return entries
 
-    # ── Press helpers (one flat A-N + O-Z site list, bucketed A-Z client-side) ───
-    def _press_all(self) -> list[Entry]:
-        seen: set[str] = set()
-        return (self._files(f"{BASE}/press.php?l=1", seen=seen) +
-                self._files(f"{BASE}/press.php?l=2", seen=seen))
+    # ── Press helpers ─────────────────────────────────────────────────────────--
+    # press.php lists each magazine as a bold name header followed by a row of
+    # per-issue links whose anchor text is just the issue number ("23"). So we group
+    # issues by their /press/<slug>/ URL directory (reliable) and take the display
+    # name from the preceding bold header (fallback: the slug). Tree:
+    #   Press/<letter>/<magazine>/ → issues.
+    def _press_index(self) -> list[dict]:
+        """[{slug, name, issues:[(label,url)]}], in page order. Cached."""
+        now = time.time()
+        if self._press_idx and self._press_idx[0] > now:
+            return self._press_idx[1]
+        by_slug: dict[str, dict] = {}
+        order: list[str] = []
+        for q in ("?l=1", "?l=2"):
+            page = f"{BASE}/press.php{q}"
+            html = self._html(page)
+            if not html:
+                continue
+            current = ""  # most recent bold magazine-name header
+            for node in HTMLParser(html).css("b, strong, a[href]"):
+                if node.tag in ("b", "strong"):
+                    t = self._clean(node.text() or "")
+                    if t and any(c.isalpha() for c in t):
+                        current = t
+                    continue
+                href = node.attributes.get("href", "")
+                low = href.lower()
+                if not (low.endswith(".zip") or low.endswith(DISK_EXTS)):
+                    continue
+                url = urljoin(page, href)
+                # /press/<slug>/<FILE> → slug groups a magazine's issues.
+                parts = url.split("/press/", 1)
+                slug = parts[1].split("/")[0] if len(parts) == 2 and "/" in parts[1] else ""
+                if not slug:
+                    slug = url.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+                if slug not in by_slug:
+                    by_slug[slug] = {"slug": slug, "name": current or slug, "issues": []}
+                    order.append(slug)
+                label = self._clean(node.text() or "") or url.rsplit("/", 1)[-1]
+                issues = by_slug[slug]["issues"]
+                if any(lbl == label for lbl, _ in issues):  # disambiguate dup labels
+                    label = f"{label} ({url.rsplit('/', 1)[-1]})"
+                issues.append((label, url))
+        index = [by_slug[s] for s in order]
+        self._press_idx = (now + CACHE_TTL, index)
+        return index
 
-    def _press_letter(self, letter: str) -> list[Entry]:
+    def _press_mags(self, letter: str) -> list[Entry]:
         out: list[Entry] = []
-        for e in self._press_all():
-            c = e.name[:1].upper()
-            if (letter == "0-9" and not c.isalpha()) or c == letter:
-                out.append(e)
+        seen: set[str] = set()
+        for m in self._press_index():
+            c = m["name"][:1].upper()
+            if not ((letter == "0-9" and not c.isalpha()) or c == letter):
+                continue
+            name = m["name"] if m["name"] not in seen else f"{m['name']} ({m['slug']})"
+            seen.add(name)
+            out.append(Entry(True, name, 0))
         return out
+
+    def _press_issues(self, mag_name: str) -> list[Entry]:
+        for m in self._press_index():
+            if m["name"] == mag_name or m["slug"] == mag_name or f"{m['name']} ({m['slug']})" == mag_name:
+                return [Entry(False, lbl, 0, url=url) for lbl, url in m["issues"]]
+        return []
 
     def _demoz_files(self, year: str, party_name: str) -> list[Entry]:
         pid = None
@@ -179,7 +232,9 @@ class VtrdAdapter(Adapter):
         if sec == "Press":
             if len(seg) == 1:
                 return [Entry(True, l, 0) for l in LETTERS]
-            return self._press_letter(seg[1])
+            if len(seg) == 2:
+                return self._press_mags(seg[1])      # magazines for a letter
+            return self._press_issues(seg[2])         # a magazine's issues
         if sec == "Demoz":
             if len(seg) == 1:  # Russian/Other curated lists + the by-year parties
                 return ([Entry(True, "Russian", 0), Entry(True, "Other", 0)] +
