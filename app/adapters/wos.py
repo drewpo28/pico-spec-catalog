@@ -24,7 +24,8 @@ import httpx
 from .base import Adapter, Entry
 
 API = "https://api.zxinfo.dk/v3"
-FILE_BASE = "https://www.worldofspectrum.org"      # serves /pub/sinclair/… directly
+FILE_BASE = "https://worldofspectrum.net"          # serves /pub/sinclair/… directly (200);
+                                                   # www.worldofspectrum.org 301-redirects those
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 1800
@@ -74,12 +75,24 @@ class WosAdapter(Adapter):
             size = min(PAGE, 10000 - offset)         # ES window: offset+size <= 10000
             url = (f"{API}/search?contenttype=SOFTWARE&genretype=GAMES"
                    f"&mode=full&size={size}&offset={offset}")
-            try:
-                r = self._client.get(url)
-                r.raise_for_status()
-                data = r.json()
-            except Exception:  # noqa: BLE001 — keep whatever we gathered
+            # The API is flaky (intermittent 503) — retry a page instead of aborting
+            # the whole crawl on the first hiccup (that left us with only page 1).
+            data = None
+            for attempt in range(5):
+                try:
+                    r = self._client.get(url)
+                    if r.status_code >= 500:
+                        time.sleep(1.0 + attempt)
+                        continue
+                    r.raise_for_status()
+                    data = r.json()
+                    break
+                except Exception:  # noqa: BLE001
+                    time.sleep(1.0 + attempt)
+            if data is None:
+                print(f"  wos: giving up at offset {offset} after retries")
                 break
+            time.sleep(0.2)  # be polite between pages
             hh = data.get("hits", {})
             tot = hh.get("total", {})
             total = tot.get("value", 0) if isinstance(tot, dict) else (tot or 0)
