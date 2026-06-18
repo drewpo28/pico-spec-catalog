@@ -22,7 +22,11 @@ import httpx
 from .base import Adapter, Entry
 
 ZXDB_ZIP_URL = "https://github.com/zxdb/ZXDB/raw/HEAD/ZXDB_mysql.sql.zip"  # HEAD = default branch
-FILE_BASE = "https://spectrumcomputing.co.uk"  # active archive; serves /pub/sinclair/… directly
+FILE_BASE = "https://worldofspectrum.net"   # download host. SC (spectrumcomputing.co.uk)
+                                            # is the active archive but its ECDSA cert curve
+                                            # fails our mbedTLS handshake (-0x4E00); the WoS
+                                            # mirror serves the same /pub/sinclair/games/ paths
+                                            # and its TLS is confirmed working on-device.
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 3600
@@ -207,6 +211,8 @@ class ScAdapter(Adapter):
             buckets[letter].append(Entry(False, name, 0, url=url))
             files += 1
 
+        for b in buckets.values():            # alphabetical within each letter (device
+            b.sort(key=lambda e: e.name.lower())  # keeps static order — no client sort)
         print(f"  sc: {files} game files, {len(titles)} entries parsed from ZXDB dump")
         self._index_cache = (time.time() + CACHE_TTL, buckets)
         return buckets
