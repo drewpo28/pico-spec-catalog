@@ -8,6 +8,7 @@ same download/unzip server-side.
 
 Tree (sections → sub-index → files), validated against the live site 2026-06-17:
   Games/<letter>/         games.php?t=<a..z|123>        → /gamez/<l>/<NAME>.zip
+  Games/{Russian,Demo,Translate,Remix}/  games.php?t=<full_ver|demo_ver|translat|remix>
   GS/                     gs.php                        → /gs/<NAME>.zip (+ others)
   Press/<letter>/<mag>/   press.php?l=1+?l=2; issues grouped by /press/<slug>/ dir,
                           magazine name from the bold header, bucketed A-Z by name
@@ -43,6 +44,9 @@ DISK_EXTS = (".trd", ".scl", ".tap", ".tzx", ".z80", ".sna", ".fdi", ".udi")
 ARCHIVE_EXTS = (".zip",) + DISK_EXTS
 LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 SECTIONS = ["Games", "Demoz", "Press", "GS"]
+# Games sub-categories — games.php?t=<value>, same /…/*.zip rows as a letter page.
+GAME_CATS = {"Russian": "full_ver", "Demo": "demo_ver",
+             "Translate": "translat", "Remix": "remix"}
 
 
 class VtrdAdapter(Adapter):
@@ -220,8 +224,11 @@ class VtrdAdapter(Adapter):
         seg = path.split("/")
         sec = seg[0]
         if sec == "Games":
-            if len(seg) == 1:
-                return [Entry(True, l, 0) for l in LETTERS]
+            if len(seg) == 1:  # category folders first, then the 0-9/A-Z index
+                return ([Entry(True, c, 0) for c in GAME_CATS] +
+                        [Entry(True, l, 0) for l in LETTERS])
+            if seg[1] in GAME_CATS:
+                return self._files(f"{BASE}/games.php?t={GAME_CATS[seg[1]]}")
             t = "123" if seg[1] == "0-9" else seg[1].lower()
             return self._files(f"{BASE}/games.php?t={t}")
         if sec == "GS":
