@@ -28,8 +28,11 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 1800
 PAGE = 500                                          # entries per API request
-PLAY_EXTS = (".tap", ".tzx", ".z80", ".sna", ".trd", ".scl",
-             ".dsk", ".szx", ".udi", ".fdi", ".zip")
+# A playable file's path contains one of these format tokens (often as
+# "NAME.tap.zip" / "NAME.z80"). Matching the TOKEN (not just ".zip") skips the AY
+# music, inlays and screenshots that also live in additionalDownloads as .zip.
+PLAY_TOKENS = (".tap", ".tzx", ".z80", ".sna", ".trd", ".scl",
+               ".dsk", ".szx", ".udi", ".fdi")
 LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 SECTIONS = ["Games"]
 
@@ -85,7 +88,8 @@ class WosAdapter(Adapter):
                 title = self._clean(src.get("title", "")) or str(hit.get("_id", ""))
                 for dl in (src.get("additionalDownloads") or []):
                     path = dl.get("path", "")
-                    if not path or not path.lower().endswith(PLAY_EXTS):
+                    low = path.lower()
+                    if not path or not any(tok in low for tok in PLAY_TOKENS):
                         continue
                     absurl = FILE_BASE + (path if path.startswith("/") else "/" + path)
                     base = absurl.rsplit("/", 1)[-1]
