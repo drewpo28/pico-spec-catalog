@@ -1,13 +1,14 @@
-"""World of Spectrum adapter — built from the downloadable ZXDB database dump.
+"""Spectrum Computing adapter — built from the downloadable ZXDB database dump.
 
-The public ZXInfo API can't be bulk-crawled (it 503s on any deep page and byletter
-omits the file paths). Instead we download the full **ZXDB MySQL dump once**
-(github.com/zxdb/ZXDB → ZXDB_mysql.sql.zip), stream-parse just the `entries`
-(id,title) and `downloads` (entry_id,file_link) tables, and join them: any download
-under /pub/sinclair/games/ with a playable extension becomes a catalog entry. No
-API rate limits, full coverage. Files are served by the worldofspectrum.net mirror.
+spectrumcomputing.co.uk is the active community ZXDB archive and hosts the game
+files directly (the same /pub/sinclair/games/… paths World of Spectrum used). The
+ZXInfo API can't be bulk-crawled (503s on deep pages), so we download the full
+**ZXDB MySQL dump once** (github.com/zxdb/ZXDB → ZXDB_mysql.sql.zip), stream-parse
+the `entries` (id,title) and `downloads` (entry_id,file_link) tables, and join them:
+any download with a playable extension becomes a catalog entry served by SC. No API
+rate limits, full coverage.
 
-Tree:  Games/<letter>/ → playable files (links to worldofspectrum.net/pub/sinclair/games/…).
+Tree:  Games/<letter>/ → playable files (links to spectrumcomputing.co.uk/<file_link>).
 """
 
 from __future__ import annotations
@@ -27,7 +28,9 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 CACHE_TTL = 3600
 PLAY_TOKENS = (".tap", ".tzx", ".z80", ".sna", ".trd", ".scl",
                ".dsk", ".szx", ".udi", ".fdi")
-GAMES_PREFIX = "/pub/sinclair/games/"        # the playable-game subtree
+GAMES_MARK = "/sinclair/games/"   # the playable-game subtree (substring — tolerant of
+                                  # /pub/ vs /zxdb/ root and a missing leading slash;
+                                  # excludes /sinclair/games-info|games-inlays/)
 LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 SECTIONS = ["Games"]
 
@@ -70,9 +73,9 @@ def _split_rows(vals: str):
     return rows
 
 
-class WosAdapter(Adapter):
-    id = "wos"
-    name = "World of Spectrum"
+class ScAdapter(Adapter):
+    id = "sc"
+    name = "Spectrum Computing"
 
     def __init__(self):
         self._client = httpx.Client(
@@ -101,7 +104,7 @@ class WosAdapter(Adapter):
             zf = zipfile.ZipFile(io.BytesIO(r.content))
             sqlname = next(n for n in zf.namelist() if n.lower().endswith(".sql"))
         except Exception as e:  # noqa: BLE001
-            print(f"  wos: ZXDB dump download/open failed: {e}")
+            print(f"  sc: ZXDB dump download/open failed: {e}")
             self._index_cache = (time.time() + CACHE_TTL, buckets)
             return buckets
 
@@ -111,7 +114,7 @@ class WosAdapter(Adapter):
         # not relied on. Collect entries{id:title} + game downloads (entry_id, path).
         titles: dict[str, str] = {}
         dls: list[tuple[str, str]] = []          # (entry_id, file_link)
-        stats = {"ent_ins": 0, "dl_ins": 0, "ent_cols": [], "dl_cols": []}
+        stats = {"ent_ins": 0, "dl_ins": 0, "ent_cols": [], "dl_cols": [], "samples": []}
 
         def payload(stmt: str, prefix: str):
             """(inline-columns-or-None, values-str) from a full INSERT statement."""
@@ -154,8 +157,10 @@ class WosAdapter(Adapter):
                     if len(row) <= max(ei, fi):
                         continue
                     path = row[fi]
+                    if len(stats["samples"]) < 8:     # diagnostic: see real path format
+                        stats["samples"].append(path)
                     low = path.lower()
-                    if low.startswith(GAMES_PREFIX) and any(t in low for t in PLAY_TOKENS):
+                    if GAMES_MARK in low and any(t in low for t in PLAY_TOKENS):
                         dls.append((row[ei], path))
 
         buf: list[str] | None = None
@@ -176,9 +181,10 @@ class WosAdapter(Adapter):
                     flush("\n".join(buf), buf_table)
                     buf = buf_table = None
 
-        print(f"  wos: ZXDB parse — ent_cols={stats['ent_cols'][:3]} ent_ins={stats['ent_ins']}; "
-              f"dl_cols={stats['dl_cols'][:4]} dl_ins={stats['dl_ins']}; "
+        print(f"  sc: ZXDB parse — ent_cols={stats['ent_cols'][:3]} ent_ins={stats['ent_ins']}; "
+              f"dl_cols={stats['dl_cols'][:5]} dl_ins={stats['dl_ins']}; "
               f"titles={len(titles)} game-dls={len(dls)}")
+        print(f"  sc: sample file_link values: {stats['samples']}")
 
         seen: dict[str, set[str]] = {l: set() for l in LETTERS}
         files = 0
@@ -195,10 +201,11 @@ class WosAdapter(Adapter):
                     name = f"{title} ({stem}) {i}"
                     i += 1
             seen[letter].add(name)
-            buckets[letter].append(Entry(False, name, 0, url=FILE_BASE + path))
+            url = FILE_BASE + (path if path.startswith("/") else "/" + path)
+            buckets[letter].append(Entry(False, name, 0, url=url))
             files += 1
 
-        print(f"  wos: {files} game files, {len(titles)} entries parsed from ZXDB dump")
+        print(f"  sc: {files} game files, {len(titles)} entries parsed from ZXDB dump")
         self._index_cache = (time.time() + CACHE_TTL, buckets)
         return buckets
 

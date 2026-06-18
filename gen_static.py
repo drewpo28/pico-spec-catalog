@@ -49,9 +49,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "vtrd":
         from app.adapters.vtrd import VtrdAdapter      # lazy (needs httpx/selectolax)
         return VtrdAdapter()
-    if site == "wos":
-        from app.adapters.wos import WosAdapter        # lazy (needs httpx)
-        return WosAdapter()
+    if site == "sc":
+        from app.adapters.sc import ScAdapter          # lazy (needs httpx)
+        return ScAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 

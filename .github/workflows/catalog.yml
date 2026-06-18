@@ -23,7 +23,7 @@ on:
     inputs:
       sites:
         description: "Space-separated site ids to export"
-        default: "vtrd wos"
+        default: "vtrd sc"
       max_files:
         description: "Cap mirrored files per run (0 = unlimited)"
         default: "400"
@@ -52,7 +52,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Export static catalog
         env:
-          SITES: ${{ github.event.inputs.sites || 'vtrd wos' }}
+          SITES: ${{ github.event.inputs.sites || 'vtrd sc' }}
           MAX_FILES: ${{ github.event.inputs.max_files || '400' }}
           MAX_DEPTH: ${{ github.event.inputs.max_depth || '4' }}
         run: |

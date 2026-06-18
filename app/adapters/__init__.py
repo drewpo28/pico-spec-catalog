@@ -17,9 +17,9 @@ def build_registry() -> "dict[str, Adapter]":
         if sid == "vtrd":
             from .vtrd import VtrdAdapter  # lazy: only this source needs httpx/selectolax
             reg["vtrd"] = VtrdAdapter()
-        elif sid == "wos":
-            from .wos import WosAdapter    # lazy (httpx)
-            reg["wos"] = WosAdapter()
+        elif sid == "sc":
+            from .sc import ScAdapter      # lazy (httpx)
+            reg["sc"] = ScAdapter()
         # Future: zxart (JSON export API) — add here.
     return reg
 
