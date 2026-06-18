@@ -20,7 +20,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "sc":
             from .sc import ScAdapter      # lazy (httpx)
             reg["sc"] = ScAdapter()
-        # Future: zxart (JSON export API) — add here.
+        elif sid == "zxart":
+            from .zxart import ZxartAdapter  # lazy (httpx) — JSON export API
+            reg["zxart"] = ZxartAdapter()
     return reg
 
 
