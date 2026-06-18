@@ -59,6 +59,8 @@ def _split_rows(vals: str):
                         buf.append("'"); i += 2; continue
                     in_str = False; i += 1; continue
                 buf.append(c); i += 1; continue
+            if c in " \t\r\n":          # formatting whitespace BETWEEN values — skip
+                i += 1; continue        # (whitespace inside a 'string' is kept above)
             if c == "'":
                 in_str = True; i += 1; continue
             if c == ",":
