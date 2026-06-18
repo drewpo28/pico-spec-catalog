@@ -29,7 +29,8 @@ FILE_BASE = "https://worldofspectrum.net"          # serves /pub/sinclair/… di
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 1800
-PAGE = 500                                          # entries per API request
+PAGE = 100   # entries/request — mode=full pages are heavy; size=500 made the API
+             # 503 on live (uncached) pages, so keep them small (~100 reqs for 10k).
 # A playable file's path contains one of these format tokens (often as
 # "NAME.tap.zip" / "NAME.z80"). Matching the TOKEN (not just ".zip") skips the AY
 # music, inlays and screenshots that also live in additionalDownloads as .zip.
@@ -89,9 +90,10 @@ class WosAdapter(Adapter):
                     break
                 except Exception:  # noqa: BLE001
                     time.sleep(1.0 + attempt)
-            if data is None:
-                print(f"  wos: giving up at offset {offset} after retries")
-                break
+            if data is None:  # page kept failing — skip it, keep crawling the rest
+                print(f"  wos: skip offset {offset} (retries failed)")
+                offset += size
+                continue
             time.sleep(0.2)  # be polite between pages
             hh = data.get("hits", {})
             tot = hh.get("total", {})
