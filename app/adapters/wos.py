@@ -3,13 +3,14 @@
 Browses ZXDB games by first letter and emits a direct download link per playable
 file — the catalog stores name + link (link mode); the device downloads/unzips.
 
-API:  GET https://api.zxinfo.dk/v3/games/byletter/{A..Z}?size=&offset=&mode=compact
+API:  GET https://api.zxinfo.dk/v3/games/byletter/{A..Z}?size=&offset=&mode=full
       → { hits: { total:{value}, hits: [ { _source: { title,
-          additionalDownloads: [ {path,type,format,size}, ... ] } } ] } }
-Download `path` is a relative WoS-archive path ("/pub/sinclair/games/.../X.tap.zip"),
-served by the worldofspectrum.net mirror → prepend https://worldofspectrum.net.
-additionalDownloads also lists inlays/screens/instructions, so we keep only items
-whose path ends in a playable/archive extension.
+          releases: [ { files: [ {path,type,format,size}, ... ] } ] } } ] } }
+The PLAYABLE files are in releases[].files[] (type "Tape image"/"Snapshot"/…);
+additionalDownloads is only inlays/screens/instructions/music — NOT the game.
+Download `path` is a relative WoS-archive path ("/pub/sinclair/games/a/AceLow.tap.zip")
+→ prepend https://www.worldofspectrum.org. We keep files whose path carries a
+playable format token.
 
 Tree:  Games/<letter>/ → playable files.  (Demos: TODO via /v3/search.)
 """
@@ -23,7 +24,7 @@ import httpx
 from .base import Adapter, Entry
 
 API = "https://api.zxinfo.dk/v3"
-FILE_BASE = "https://worldofspectrum.net"          # mirror that serves /pub/sinclair/…
+FILE_BASE = "https://www.worldofspectrum.org"      # serves /pub/sinclair/… directly
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 1800
@@ -63,7 +64,7 @@ class WosAdapter(Adapter):
         offset, total, guard = 0, 1, 0
         while offset < total and guard < 60:
             guard += 1
-            url = f"{API}/games/byletter/{letter}?mode=compact&size={PAGE}&offset={offset}"
+            url = f"{API}/games/byletter/{letter}?mode=full&size={PAGE}&offset={offset}"
             try:
                 r = self._client.get(url)
                 r.raise_for_status()
@@ -86,23 +87,26 @@ class WosAdapter(Adapter):
                     new_ids += 1
                 src = hit.get("_source", hit)
                 title = self._clean(src.get("title", "")) or str(hit.get("_id", ""))
-                for dl in (src.get("additionalDownloads") or []):
-                    path = dl.get("path", "")
-                    low = path.lower()
-                    if not path or not any(tok in low for tok in PLAY_TOKENS):
-                        continue
-                    absurl = FILE_BASE + (path if path.startswith("/") else "/" + path)
-                    base = absurl.rsplit("/", 1)[-1]
-                    name = title
-                    if name in seen:  # several files for one game → disambiguate
-                        stem = base.rsplit(".", 1)[0]
-                        name = f"{title} ({stem})"
-                        i = 2
-                        while name in seen:
-                            name = f"{title} ({stem}) {i}"
-                            i += 1
-                    seen.add(name)
-                    entries.append(Entry(False, name, dl.get("size", 0) or 0, url=absurl))
+                # Playable files live in releases[].files[] ({path,type,format,size}).
+                # additionalDownloads is only inlays/screens/instructions/music.
+                for rel in (src.get("releases") or []):
+                    for f in (rel.get("files") or []):
+                        path = f.get("path", "")
+                        low = path.lower()
+                        if not path or not any(tok in low for tok in PLAY_TOKENS):
+                            continue
+                        absurl = FILE_BASE + (path if path.startswith("/") else "/" + path)
+                        base = absurl.rsplit("/", 1)[-1]
+                        name = title
+                        if name in seen:  # several files for one game → disambiguate
+                            stem = base.rsplit(".", 1)[0]
+                            name = f"{title} ({stem})"
+                            i = 2
+                            while name in seen:
+                                name = f"{title} ({stem}) {i}"
+                                i += 1
+                        seen.add(name)
+                        entries.append(Entry(False, name, f.get("size", 0) or 0, url=absurl))
             if new_ids == 0:  # page added nothing new → pagination not advancing
                 break
             offset += len(hits)
