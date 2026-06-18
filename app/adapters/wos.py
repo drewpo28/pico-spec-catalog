@@ -47,29 +47,38 @@ class WosAdapter(Adapter):
             timeout=30.0, follow_redirects=True,
             headers={"User-Agent": UA, "Accept": "application/json"},
         )
-        self._cache: dict[str, tuple[float, list[Entry]]] = {}  # letter -> (expires, entries)
+        self._index_cache: tuple[float, dict[str, list[Entry]]] | None = None
 
     @staticmethod
     def _clean(s: str) -> str:
         return (s or "").replace("\t", " ").replace("\r", " ").replace("\n", " ") \
                         .replace("/", "_").strip()
 
-    def _games(self, letter: str) -> list[Entry]:
-        c = self._cache.get(letter)
-        if c and c[0] > time.time():
-            return c[1]
-        entries: list[Entry] = []
-        seen: set[str] = set()
-        seen_ids: set[str] = set()
-        offset, total, guard = 0, 1, 0
-        while offset < total and guard < 60:
-            guard += 1
-            url = f"{API}/games/byletter/{letter}?mode=full&size={PAGE}&offset={offset}"
+    @staticmethod
+    def _bucket(title: str) -> str:
+        c = title[:1].upper()
+        return c if ("A" <= c <= "Z") else "0-9"
+
+    def _index(self) -> "dict[str, list[Entry]]":
+        """All playable games bucketed A-Z, via /v3/search (the only endpoint that
+        returns releases[].files[]). byletter lacks releases; the search ES window
+        caps at 10000, so we page the first ~10000 SOFTWARE/GAMES — partial but huge
+        coverage in ~20 requests instead of one detail fetch per game. Cached."""
+        if self._index_cache and self._index_cache[0] > time.time():
+            return self._index_cache[1]
+        buckets: dict[str, list[Entry]] = {l: [] for l in LETTERS}
+        seen: dict[str, set[str]] = {l: set() for l in LETTERS}
+        files = 0
+        offset, total = 0, 10000
+        while offset < total and offset < 10000:
+            size = min(PAGE, 10000 - offset)         # ES window: offset+size <= 10000
+            url = (f"{API}/search?contenttype=SOFTWARE&genretype=GAMES"
+                   f"&mode=full&size={size}&offset={offset}")
             try:
                 r = self._client.get(url)
                 r.raise_for_status()
                 data = r.json()
-            except Exception:  # noqa: BLE001 — degrade to whatever we have
+            except Exception:  # noqa: BLE001 — keep whatever we gathered
                 break
             hh = data.get("hits", {})
             tot = hh.get("total", {})
@@ -77,42 +86,38 @@ class WosAdapter(Adapter):
             hits = hh.get("hits", []) or []
             if not hits:
                 break
-            new_ids = 0
             for hit in hits:
-                hid = str(hit.get("_id", ""))
-                if hid and hid in seen_ids:  # offset ignored / overlap → skip dup entry
-                    continue
-                if hid:
-                    seen_ids.add(hid)
-                    new_ids += 1
                 src = hit.get("_source", hit)
                 title = self._clean(src.get("title", "")) or str(hit.get("_id", ""))
-                # Playable files live in releases[].files[] ({path,type,format,size}).
-                # additionalDownloads is only inlays/screens/instructions/music.
+                letter = self._bucket(title)
                 for rel in (src.get("releases") or []):
                     for f in (rel.get("files") or []):
                         path = f.get("path", "")
                         low = path.lower()
-                        if not path or not any(tok in low for tok in PLAY_TOKENS):
+                        # Only files actually hosted under /pub/ are downloadable;
+                        # /denied/ (rights-removed) etc. are skipped.
+                        if not low.startswith("/pub/") or not any(t in low for t in PLAY_TOKENS):
                             continue
-                        absurl = FILE_BASE + (path if path.startswith("/") else "/" + path)
-                        base = absurl.rsplit("/", 1)[-1]
+                        base = path.rsplit("/", 1)[-1]
                         name = title
-                        if name in seen:  # several files for one game → disambiguate
+                        if name in seen[letter]:  # multiple files for one game
                             stem = base.rsplit(".", 1)[0]
                             name = f"{title} ({stem})"
                             i = 2
-                            while name in seen:
+                            while name in seen[letter]:
                                 name = f"{title} ({stem}) {i}"
                                 i += 1
-                        seen.add(name)
-                        entries.append(Entry(False, name, f.get("size", 0) or 0, url=absurl))
-            if new_ids == 0:  # page added nothing new → pagination not advancing
-                break
+                        seen[letter].add(name)
+                        buckets[letter].append(Entry(False, name, f.get("size", 0) or 0,
+                                                     url=FILE_BASE + path))
+                        files += 1
             offset += len(hits)
-        print(f"  wos {letter}: {len(entries)} files (of {total} entries)")
-        self._cache[letter] = (time.time() + CACHE_TTL, entries)
-        return entries
+            if offset >= total:
+                break
+        print(f"  wos: {files} playable files across {sum(1 for b in buckets.values() if b)} letters "
+              f"(of {total} games, ES window 10000)")
+        self._index_cache = (time.time() + CACHE_TTL, buckets)
+        return buckets
 
     # ── RemoteFs surface ──────────────────────────────────────────────────────--
     def list(self, path: str) -> list[Entry]:
@@ -122,7 +127,7 @@ class WosAdapter(Adapter):
         if seg[0] == "Games":
             if len(seg) == 1:
                 return [Entry(True, l, 0) for l in LETTERS]
-            return self._games(seg[1])
+            return self._index().get(seg[1], [])
         return []
 
     def fetch(self, path: str, name: str) -> tuple[bytes, str]:
