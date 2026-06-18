@@ -105,76 +105,79 @@ class WosAdapter(Adapter):
             self._index_cache = (time.time() + CACHE_TTL, buckets)
             return buckets
 
-        # Single streaming pass: capture column orders from CREATE TABLE, collect
-        # entries{id:title} and the game downloads (entry_id, path).
+        # ZXDB inserts are MULTI-LINE (the VALUES tuples wrap onto following lines),
+        # so we buffer each full `INSERT INTO ...;` statement before parsing. Columns
+        # come from the statement's own inline list (complete-insert); CREATE TABLE is
+        # not relied on. Collect entries{id:title} + game downloads (entry_id, path).
         titles: dict[str, str] = {}
         dls: list[tuple[str, str]] = []          # (entry_id, file_link)
-        cols: dict[str, list[str]] = {}          # table -> column names (order)
-        cur_table = None                          # table whose CREATE block we're in
-        ent_ins = dl_ins = 0                       # diagnostics: INSERT lines seen
+        stats = {"ent_ins": 0, "dl_ins": 0, "ent_cols": [], "dl_cols": []}
 
-        # Extract (inline-columns-or-None, values-str) from an INSERT line, tolerant
-        # of mysqldump --complete-insert (`INSERT INTO `t` (`a`,`b`) VALUES (...)`).
-        def payload(line: str, prefix: str):
-            rest = line[len(prefix):].lstrip()
-            inline_cols = None
-            if rest.startswith("("):
+        def payload(stmt: str, prefix: str):
+            """(inline-columns-or-None, values-str) from a full INSERT statement."""
+            rest = stmt[len(prefix):].lstrip()
+            inline = None
+            if rest.startswith("("):                 # complete-insert column list
                 end = rest.find(")")
                 if end != -1:
-                    inline_cols = [c.strip().strip("` ") for c in rest[1:end].split(",")]
+                    inline = [c.strip().strip("` ") for c in rest[1:end].split(",")]
                     rest = rest[end + 1:].lstrip()
             if rest[:6].upper() == "VALUES":
-                return inline_cols, rest[6:].lstrip()
+                return inline, rest[6:].lstrip()
             return None, None
 
+        def flush(stmt: str, table: str):
+            prefix = f"INSERT INTO `{table}`"
+            ic, vals = payload(stmt, prefix)
+            if vals is None:
+                return
+            if table == "entries":
+                stats["ent_ins"] += 1
+                c = ic or stats["ent_cols"]
+                if ic and not stats["ent_cols"]:
+                    stats["ent_cols"] = ic
+                ti = c.index("title") if "title" in c else 1
+                ii = c.index("id") if "id" in c else 0
+                for row in _split_rows(vals):
+                    if len(row) > max(ti, ii):
+                        titles[row[ii]] = row[ti]
+            else:
+                stats["dl_ins"] += 1
+                c = ic or stats["dl_cols"]
+                if ic and not stats["dl_cols"]:
+                    stats["dl_cols"] = ic
+                ei = c.index("entry_id") if "entry_id" in c else 1
+                fi = c.index("file_link") if "file_link" in c else None
+                if fi is None:
+                    return
+                for row in _split_rows(vals):
+                    if len(row) <= max(ei, fi):
+                        continue
+                    path = row[fi]
+                    low = path.lower()
+                    if low.startswith(GAMES_PREFIX) and any(t in low for t in PLAY_TOKENS):
+                        dls.append((row[ei], path))
+
+        buf: list[str] | None = None
+        buf_table = None
         with zf.open(sqlname) as fh:
             for raw in io.TextIOWrapper(fh, encoding="utf-8", errors="replace"):
                 line = raw.rstrip("\r\n")
-                if cur_table:                     # inside a CREATE TABLE block
-                    s = line.strip()
-                    if s.startswith(")"):
-                        cur_table = None
-                    elif s.startswith("`"):
-                        end = s.find("`", 1)
-                        if end > 1:
-                            cols[cur_table].append(s[1:end])
-                    continue
-                if line.startswith("CREATE TABLE `entries`"):
-                    cur_table = "entries"; cols["entries"] = []
-                elif line.startswith("CREATE TABLE `downloads`"):
-                    cur_table = "downloads"; cols["downloads"] = []
-                elif line.startswith("INSERT INTO `entries`"):
-                    ic, vals = payload(line, "INSERT INTO `entries`")
-                    if vals is None:
+                if buf is None:
+                    if line.startswith("INSERT INTO `entries`"):
+                        buf, buf_table = [line], "entries"
+                    elif line.startswith("INSERT INTO `downloads`"):
+                        buf, buf_table = [line], "downloads"
+                    else:
                         continue
-                    ent_ins += 1
-                    c = ic or cols.get("entries", [])
-                    ti = c.index("title") if "title" in c else 1
-                    ii = c.index("id") if "id" in c else 0
-                    for row in _split_rows(vals):
-                        if len(row) > max(ti, ii):
-                            titles[row[ii]] = row[ti]
-                elif line.startswith("INSERT INTO `downloads`"):
-                    ic, vals = payload(line, "INSERT INTO `downloads`")
-                    if vals is None:
-                        continue
-                    dl_ins += 1
-                    c = ic or cols.get("downloads", [])
-                    ei = c.index("entry_id") if "entry_id" in c else 1
-                    fi = c.index("file_link") if "file_link" in c else None
-                    if fi is None:
-                        continue
-                    for row in _split_rows(vals):
-                        if len(row) <= max(ei, fi):
-                            continue
-                        path = row[fi]
-                        low = path.lower()
-                        if (low.startswith(GAMES_PREFIX)
-                                and any(t in low for t in PLAY_TOKENS)):
-                            dls.append((row[ei], path))
+                else:
+                    buf.append(line)
+                if line.rstrip().endswith(";"):       # statement complete
+                    flush("\n".join(buf), buf_table)
+                    buf = buf_table = None
 
-        print(f"  wos: ZXDB parse — entries cols={cols.get('entries')} ins={ent_ins}; "
-              f"downloads cols={cols.get('downloads')} ins={dl_ins}; "
+        print(f"  wos: ZXDB parse — ent_cols={stats['ent_cols'][:3]} ent_ins={stats['ent_ins']}; "
+              f"dl_cols={stats['dl_cols'][:4]} dl_ins={stats['dl_ins']}; "
               f"titles={len(titles)} game-dls={len(dls)}")
 
         seen: dict[str, set[str]] = {l: set() for l in LETTERS}
