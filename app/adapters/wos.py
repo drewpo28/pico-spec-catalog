@@ -21,7 +21,7 @@ import httpx
 from .base import Adapter, Entry
 
 ZXDB_ZIP_URL = "https://github.com/zxdb/ZXDB/raw/HEAD/ZXDB_mysql.sql.zip"  # HEAD = default branch
-FILE_BASE = "https://worldofspectrum.net"   # serves /pub/sinclair/… directly (200)
+FILE_BASE = "https://spectrumcomputing.co.uk"  # active archive; serves /pub/sinclair/… directly
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 3600
@@ -111,12 +111,25 @@ class WosAdapter(Adapter):
         dls: list[tuple[str, str]] = []          # (entry_id, file_link)
         cols: dict[str, list[str]] = {}          # table -> column names (order)
         cur_table = None                          # table whose CREATE block we're in
-        ent_pin = ("INSERT INTO `entries` VALUES ")
-        dl_pin = ("INSERT INTO `downloads` VALUES ")
+        ent_ins = dl_ins = 0                       # diagnostics: INSERT lines seen
+
+        # Extract (inline-columns-or-None, values-str) from an INSERT line, tolerant
+        # of mysqldump --complete-insert (`INSERT INTO `t` (`a`,`b`) VALUES (...)`).
+        def payload(line: str, prefix: str):
+            rest = line[len(prefix):].lstrip()
+            inline_cols = None
+            if rest.startswith("("):
+                end = rest.find(")")
+                if end != -1:
+                    inline_cols = [c.strip().strip("` ") for c in rest[1:end].split(",")]
+                    rest = rest[end + 1:].lstrip()
+            if rest[:6].upper() == "VALUES":
+                return inline_cols, rest[6:].lstrip()
+            return None, None
 
         with zf.open(sqlname) as fh:
             for raw in io.TextIOWrapper(fh, encoding="utf-8", errors="replace"):
-                line = raw.rstrip("\n")
+                line = raw.rstrip("\r\n")
                 if cur_table:                     # inside a CREATE TABLE block
                     s = line.strip()
                     if s.startswith(")"):
@@ -130,20 +143,28 @@ class WosAdapter(Adapter):
                     cur_table = "entries"; cols["entries"] = []
                 elif line.startswith("CREATE TABLE `downloads`"):
                     cur_table = "downloads"; cols["downloads"] = []
-                elif line.startswith(ent_pin):
-                    c = cols.get("entries", [])
+                elif line.startswith("INSERT INTO `entries`"):
+                    ic, vals = payload(line, "INSERT INTO `entries`")
+                    if vals is None:
+                        continue
+                    ent_ins += 1
+                    c = ic or cols.get("entries", [])
                     ti = c.index("title") if "title" in c else 1
                     ii = c.index("id") if "id" in c else 0
-                    for row in _split_rows(line[len(ent_pin):]):
+                    for row in _split_rows(vals):
                         if len(row) > max(ti, ii):
                             titles[row[ii]] = row[ti]
-                elif line.startswith(dl_pin):
-                    c = cols.get("downloads", [])
+                elif line.startswith("INSERT INTO `downloads`"):
+                    ic, vals = payload(line, "INSERT INTO `downloads`")
+                    if vals is None:
+                        continue
+                    dl_ins += 1
+                    c = ic or cols.get("downloads", [])
                     ei = c.index("entry_id") if "entry_id" in c else 1
                     fi = c.index("file_link") if "file_link" in c else None
                     if fi is None:
                         continue
-                    for row in _split_rows(line[len(dl_pin):]):
+                    for row in _split_rows(vals):
                         if len(row) <= max(ei, fi):
                             continue
                         path = row[fi]
@@ -151,6 +172,10 @@ class WosAdapter(Adapter):
                         if (low.startswith(GAMES_PREFIX)
                                 and any(t in low for t in PLAY_TOKENS)):
                             dls.append((row[ei], path))
+
+        print(f"  wos: ZXDB parse — entries cols={cols.get('entries')} ins={ent_ins}; "
+              f"downloads cols={cols.get('downloads')} ins={dl_ins}; "
+              f"titles={len(titles)} game-dls={len(dls)}")
 
         seen: dict[str, set[str]] = {l: set() for l in LETTERS}
         files = 0
