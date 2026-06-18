@@ -22,11 +22,10 @@ import httpx
 from .base import Adapter, Entry
 
 ZXDB_ZIP_URL = "https://github.com/zxdb/ZXDB/raw/HEAD/ZXDB_mysql.sql.zip"  # HEAD = default branch
-FILE_BASE = "https://worldofspectrum.net"   # download host. SC (spectrumcomputing.co.uk)
-                                            # is the active archive but its ECDSA cert curve
-                                            # fails our mbedTLS handshake (-0x4E00); the WoS
-                                            # mirror serves the same /pub/sinclair/games/ paths
-                                            # and its TLS is confirmed working on-device.
+FILE_BASE = "https://spectrumcomputing.co.uk"  # active archive, serves /pub/sinclair/games/
+                                               # directly. Its ECDSA-P256 leaf (signed
+                                               # ecdsa-with-SHA384) needs MBEDTLS_SHA384_C on
+                                               # the device or the handshake fails -0x4E00.
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 3600
