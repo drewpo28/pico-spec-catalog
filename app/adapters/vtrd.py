@@ -155,32 +155,29 @@ class VtrdAdapter(Adapter):
             html = self._html(page)
             if not html:
                 continue
-            current = ""  # most recent bold magazine-name header
-            for node in HTMLParser(html).css("b, strong, a[href]"):
-                if node.tag in ("b", "strong"):
-                    t = self._clean(node.text() or "")
-                    if t and any(c.isalpha() for c in t):
-                        current = t
-                    continue
-                href = node.attributes.get("href", "")
+            # Use the same plain a[href] scan as _files (proven to find press links);
+            # group issues by the /press/<slug>/ URL dir = one magazine.
+            for a in HTMLParser(html).css("a[href]"):
+                href = a.attributes.get("href", "")
                 low = href.lower()
                 if not (low.endswith(".zip") or low.endswith(DISK_EXTS)):
                     continue
                 url = urljoin(page, href)
-                # /press/<slug>/<FILE> → slug groups a magazine's issues.
                 parts = url.split("/press/", 1)
                 slug = parts[1].split("/")[0] if len(parts) == 2 and "/" in parts[1] else ""
                 if not slug:
                     slug = url.rsplit("/", 1)[-1].rsplit(".", 1)[0]
                 if slug not in by_slug:
-                    by_slug[slug] = {"slug": slug, "name": current or slug, "issues": []}
+                    name = slug.replace("_", " ").replace("-", " ").strip().title() or slug
+                    by_slug[slug] = {"slug": slug, "name": name, "issues": []}
                     order.append(slug)
-                label = self._clean(node.text() or "") or url.rsplit("/", 1)[-1]
+                label = self._clean(a.text() or "") or url.rsplit("/", 1)[-1]
                 issues = by_slug[slug]["issues"]
                 if any(lbl == label for lbl, _ in issues):  # disambiguate dup labels
                     label = f"{label} ({url.rsplit('/', 1)[-1]})"
                 issues.append((label, url))
         index = [by_slug[s] for s in order]
+        print(f"  press: {len(index)} magazines, {sum(len(m['issues']) for m in index)} issues")
         self._press_idx = (now + CACHE_TTL, index)
         return index
 
