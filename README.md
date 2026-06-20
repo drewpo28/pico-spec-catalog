@@ -4,27 +4,47 @@ Catalog of ZX-Spectrum disk/tape images for the
 [pico-spec](https://github.com/drewpo28/pico-spec) device (RP2350 + ESP-01S) to
 browse and download from internet archives. It hides every per-site difference
 (HTML scraping, JSON APIs, HTTPS, unzipping) behind one trivial line protocol, so
-the firmware stays thin and new sources are added here — no reflashing.
+the firmware stays thin and new sources are added **here** — no reflashing.
 
 Two ways to serve it:
 
-- **Serverless (default)** — a GitHub Action pre-renders the catalog to a static
-  tree and publishes it to **GitHub Pages**; the device reads it directly over TLS.
-  No always-on server. Jump to
+- **Serverless (default, live)** — a GitHub Action pre-renders the catalog to a
+  static tree and publishes it to **GitHub Pages**; the device reads it directly over
+  TLS. No always-on server. This is what `pico-spec` uses out of the box. Jump to
   [Serverless mode](#serverless-mode--static-export-to-github-pages).
 - **Dynamic server** — run the FastAPI service (Docker) as an always-fresh, cached
-  HTTP proxy. See [Run the dynamic server](#run-the-dynamic-server).
+  HTTP proxy. Useful for local development. See [Run the dynamic server](#run-the-dynamic-server).
+
+Live catalog: <https://drewpo28.github.io/pico-spec-catalog/>
 
 ## Why a proxy/exporter (and not on-device)
 
 - `vtrd.in` has **no API** (plain HTML) and returns **403** to non-browser
   User-Agents. Scraping + a browser UA belong on a server, not in firmware.
-- Upstream downloads are **HTTPS**; the ESP-01S does TLS only slowly/unreliably.
-  The server terminates TLS and re-serves the bytes as plain HTTP.
-- The server caches listings, so the device is fast and the archives aren't
+- Upstream downloads are **HTTPS** and often **zipped**. Resolving the real link and
+  unzipping at build time means the device just GETs a plain static URL.
+- Listings are pre-rendered/cached, so the device is fast and the archives aren't
   hammered.
 
-## Protocol (device ⇄ server)
+## How the device consumes it
+
+The firmware side is `src/HttpCatalogFs.{h,cpp}` in pico-spec (a `RemoteFs`
+implementation behind **Network → F5 → Web Archives**). The device does **HTTPS
+itself** (mbedTLS / `TlsSock` on the RP2350; the ESP-01S is a plain-TCP bridge).
+
+`Config::catalog_host` (saved in `wifi.cfg`) picks the source —
+`HttpCatalogFs::useStaticTree()`:
+
+| `catalog_host` | Mode |
+|----------------|------|
+| *empty* (default) | static tree at the built-in `https://drewpo28.github.io/pico-spec-catalog` |
+| a full `http(s)://…` base URL | static tree at that base |
+| a bare `host` / `host:port` | dynamic `/v1` server (below) |
+
+> pico-spec's *own* always-on catalog-server code was removed from the firmware; the
+> `/v1` **client** path stays, so a bare `host:port` still talks to the Docker server.
+
+## Protocol (device ⇄ dynamic server)
 
 ```
 GET /v1/sites                          -> "<id>\t<display>\n"  per source
@@ -42,56 +62,54 @@ GET /v1/get?site=<s>&path=<p>&name=<n> -> raw file bytes (Content-Length set)
 docker compose up --build         # from the repo root; listens on :8080
 ```
 
-On the device: **Network → Download archive**, enter the server as
-`host` or `host:port` when prompted (saved to `wifi.cfg` as `catalog_host`).
+On the device there is **no menu** for this — set the `catalog_host` key in
+`/.config/pico-spec/wifi.cfg` on the SD card to the server as `host` or `host:port`.
+Leave the key unset/empty to use the serverless GitHub-Pages tree instead (the default).
 
 ## Verify
 
 ```bash
-# Self-contained "local" source (serves ./data/files):
-mkdir -p data/files && cp some.trd data/files/
 curl 'http://localhost:8080/v1/sites'
-curl 'http://localhost:8080/v1/list?site=local&path='
-curl -OJ 'http://localhost:8080/v1/get?site=local&path=&name=some.trd'
-
-# Real source:
 curl 'http://localhost:8080/v1/list?site=vtrd&path=A'
+curl -OJ 'http://localhost:8080/v1/get?site=vtrd&path=A&name=<file>'
 ```
 
 ## Adapters (`app/adapters/`)
 
-| id      | source                | status |
-|---------|-----------------------|--------|
-| `local` | a local folder tree   | ready (offline-testable reference) |
-| `vtrd`  | vtrd.in (HTML scrape) | best-effort — **validate CSS selectors against the live site** |
-| `zxart` | zxart.ee JSON API     | TODO   |
-| `wos`   | ZXInfo API v3 (ZXDB)  | TODO   |
+Enable sources with `CATALOG_SITES` (comma/space list; code default `vtrd`, the
+Action builds `vtrd sc zxart`). The order is the order shown in the device picker.
 
-Enable sources with `CATALOG_SITES` (comma list, default `local,vtrd`). Add a
-new archive by implementing `Adapter.list()` / `Adapter.fetch()` and registering
-it in `app/adapters/__init__.py` — the firmware needs no changes.
+| id      | source                       | how |
+|---------|------------------------------|-----|
+| `vtrd`  | [vtrd.in](https://vtr.dscaler.ru/) | HTML scrape (no API; 403s non-browser UAs → crawl runs server-side) |
+| `sc`    | Spectrum Computing           | ZXDB MySQL dump; files served from `worldofspectrum.net` (Spectrum Computing's TLS cert curve fails the device's mbedTLS) |
+| `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
 
-> The `vtrd` adapter's scraping selectors are best-effort (vtrd.in has no stable
-> contract). The API layer, caching, zip-unpacking and streaming are production
-> shape; tune the selectors in `app/adapters/vtrd.py` against the live markup.
+Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
+`app/adapters/base.py`) and registering it in `app/adapters/__init__.py` — the
+firmware needs no changes. `gen_static.py` reuses the **same adapters** as the
+server, so there's no second scraper to maintain.
+
+> Scraping selectors (e.g. `vtrd`) are best-effort — upstream sites have no stable
+> contract. The API layer, caching, zip-unpacking and streaming are production shape;
+> tune selectors against the live markup when a site changes.
 
 ## Serverless mode — static export to GitHub Pages
 
-Instead of running this service 24/7, a **GitHub Action (cron)** can pre-render
-the catalog into a **static tree** and publish it to GitHub Pages. The device
-then fetches it directly **over TLS** (`TlsSock` on the RP2350) — no always-on
-server. The crawl runs on GitHub's runners (their IP, a real browser UA), so the
-device never touches the live site.
+Instead of running the service 24/7, a **GitHub Action (cron, 04:17 UTC)** pre-renders
+the catalog into a **static tree** and publishes it to GitHub Pages. The device
+fetches it directly **over TLS** (`TlsSock` on the RP2350) — no always-on server. The
+crawl runs on GitHub's runners (their IP, a real browser UA), so the device never
+touches the live site.
 
-`gen_static.py` reuses the **same adapters** as the server, so there's no second
-scraper to maintain.
+`gen_static.py` reuses the same adapters as the server, so there's no second scraper.
 
 ### Static layout (under the Pages root)
 
 ```
 sites.tsv                 "<id>\t<display>\n" per source        (== /v1/sites)
 <site>/_root.tsv          root directory listing of a site
-<site>/<slug>.tsv         listing of directory <path>  (slug == path, '/'→'~')
+<site>/<slug>.tsv         listing of directory <path>  (slug == path, '' → _root, '/' → '~')
 <site>/files/<slug>/<fn>  mirrored file bytes (the download targets)
 ```
 
@@ -106,33 +124,33 @@ F<TAB><name><TAB><size><TAB><url>        file   → GET <url> (relative to Pages
                                          root, or absolute if it starts with http)
 ```
 
-Example (`local` source, generated — see `static-sample/`):
+Example (`vtrd` root, committed under `static-sample/`):
 
 ```
-# local/_root.tsv
-D	Games	0	Games
-F	hello.trd	13	local/files/_root/hello.trd
+# vtrd/_root.tsv
+D	A	0	A
+D	B	0	B
+...
 ```
 
-Files are **mirrored at build time** (the adapter's `fetch()` resolves the real
-link and unzips to a ready `.trd`/`.tap`). That is the documented fallback for
-Cloudflare-hard / archive-packed sites like vtrd.in: the device just GETs a plain
-static URL instead of fighting a 403 + `.zip`.
+Files are resolved at build time: the exporter either **mirrors** the bytes (fetch()
+resolves the real link and unzips to a ready `.trd`/`.tap`, written under
+`<site>/files/…`) or, when an entry carries a direct URL, writes that **absolute URL**
+as the locator (tiny Pages, the device downloads + unzips it itself). Either way the
+device just follows the `F`-line's 4th column.
 
 ### Build it locally
 
 ```bash
 pip install -r requirements.txt
-python3 gen_static.py --out _site --site local                 # offline, deterministic
 python3 gen_static.py --out _site --site vtrd --max-files 400 --max-depth 2
+python3 gen_static.py --out _site --site sc
+python3 gen_static.py --out _site --site zxart
 # _site/ is the Pages root; sites.tsv + per-site trees live there.
 ```
 
-`data/files/` holds a committed sample for the `local` source (so the cron has
-something to export out of the box); drop your own `.trd`/`.tap` there to grow the
-local mirror. `static-sample/` is a committed, ready-to-serve example of the
-exporter's output (`local` fully mirrored + the deterministic `vtrd/_root.tsv`
-letter index).
+`static-sample/` is a committed, ready-to-serve example of the exporter's output
+(`sites.tsv` + a `vtrd/_root.tsv` letter index).
 
 ### Deploy (one-time setup)
 
@@ -141,19 +159,10 @@ This repo **is** the dedicated catalog, so deployment is just enabling Pages:
 1. Push this repo to GitHub (`drewpo28/pico-spec-catalog`).
 2. **Settings → Pages → Source: GitHub Actions**.
 3. **Actions → Build catalog (Pages) → Run workflow** (or wait for the daily cron
-   at 04:17 UTC). It runs `gen_static.py` and deploys `_site/` to Pages.
-4. The catalog is then live at `https://drewpo28.github.io/pico-spec-catalog/`
-   — point the device's `catalog_host` there.
+   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc zxart"`, `MAX_FILES=400`,
+   `MAX_DEPTH=4` by default) and deploys `_site/` to Pages.
+4. The catalog is then live at `https://drewpo28.github.io/pico-spec-catalog/` — which
+   is the device's built-in default (`catalog_host` empty).
 
 The workflow lives at `.github/workflows/catalog.yml` (daily cron +
 `workflow_dispatch` with `sites` / `max_files` / `max_depth` inputs).
-
-### Device side (follow-up, not yet wired)
-
-The current `HttpCatalogFs` speaks the **dynamic** `/v1/list?site&path` protocol
-(3-column, server resolves downloads). To consume the **static** tree it needs a
-small change: build path-based URLs (`<base>/<site>/<slug>.tsv`, `_root` at root)
-and use the F-line's 4th *locator* column as the download URL in `get()`. Until
-then, use the dynamic server (Docker) above; the static export and its format are
-ready to plug in. In pico-spec firmware, `Network → HTTP test (curl)` can fetch
-any of these static URLs today to validate them on hardware.
