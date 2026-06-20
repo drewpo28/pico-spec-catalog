@@ -81,7 +81,7 @@ Action builds `vtrd sc zxart`). The order is the order shown in the device picke
 
 | id      | source                       | how |
 |---------|------------------------------|-----|
-| `vtrd`  | [vtrd.in](https://vtr.dscaler.ru/) | HTML scrape (no API; 403s non-browser UAs → crawl runs server-side) |
+| `vtrd`  | [vtrd.in](https://vtrd.in/) | HTML scrape (no API; 403s non-browser UAs → crawl runs server-side) |
 | `sc`    | [Spectrum Computing](https://spectrumcomputing.co.uk/) | listing built from the ZXDB MySQL dump; files served from `spectrumcomputing.co.uk` (device TLS handles its cert via mbedTLS `SHA384_C`) |
 | `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
 
