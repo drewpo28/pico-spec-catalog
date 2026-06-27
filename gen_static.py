@@ -55,6 +55,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "zxart":
         from app.adapters.zxart import ZxartAdapter    # lazy (needs httpx)
         return ZxartAdapter()
+    if site == "alf":
+        from app.adapters.alf import AlfAdapter        # lazy (needs httpx)
+        return AlfAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 

@@ -23,6 +23,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "zxart":
             from .zxart import ZxartAdapter  # lazy (httpx) — JSON export API
             reg["zxart"] = ZxartAdapter()
+        elif sid == "alf":
+            from .alf import AlfAdapter      # lazy (httpx) — zxbyte.org cartridges
+            reg["alf"] = AlfAdapter()
     return reg
 
 
