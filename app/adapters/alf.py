@@ -1,8 +1,10 @@
 """ALF (Эльф) cartridge adapter — zxbyte.org cartridge ROM dumps.
 
-A flat list of cartridge ROM .zip archives scraped from zxbyte.org/alf_games.htm
-(links of the form doc/alf/Alf-N_ROM.zip). Each is a direct .zip the device
-downloads and unzips itself; the inner .rom is flashed into the shared ALF
+A flat list of cartridge ROM .zip archives scraped from zxbyte.org (links of the
+form doc/alf/*.zip). Two source pages are scraped: alf_games.htm (the ALF-1..10
+cartridges + the 1-4 compilation) and alf_dopsoft.htm (additional software/games:
+ALF-11/12, L'Abbaye, Metal Man Reloaded, Test4-30…). Each is a direct .zip the
+device downloads and unzips itself; the inner .rom is flashed into the shared ALF
 cartridge region by the firmware (link mode → nothing mirrored, tiny Pages tree).
 """
 
@@ -14,18 +16,24 @@ import httpx
 
 from .base import Adapter, Entry
 
-PAGE = "https://zxbyte.org/alf_games.htm"
+PAGES = [
+    "https://zxbyte.org/alf_games.htm",     # ALF-1..10 + 1-4 compilation
+    "https://zxbyte.org/alf_dopsoft.htm",   # ALF-11/12, L'Abbaye, Metal Man Reloaded, Test4-30
+]
 BASE = "https://zxbyte.org/"
 # href="doc/alf/Alf-1_ROM.zip" (single or double quoted, any case)
 HREF = re.compile(r'''href\s*=\s*["'](doc/alf/[^"']+\.zip)["']''', re.I)
 
 
 def _display(href: str) -> str:
-    """doc/alf/Alf-1_ROM.zip -> "ALF-1.zip"; Alf1-4_ROM.zip -> "ALF1-4.zip"."""
+    """doc/alf/Alf-1_ROM.zip -> "ALF-1.zip"; metal_man_reloaded.zip -> "Metal Man Reloaded.zip"."""
     fn = href.rsplit("/", 1)[-1]
     name = re.sub(r"\.zip$", "", fn, flags=re.I)        # strip extension
     name = re.sub(r"_ROM$", "", name, flags=re.I)       # strip _ROM suffix
-    name = re.sub(r"^alf", "ALF", name, flags=re.I).replace("_", " ")
+    if re.match(r"^alf", name, flags=re.I):             # ALF-N cartridges -> uppercase prefix
+        name = re.sub(r"^alf", "ALF", name, flags=re.I).replace("_", " ")
+    else:                                               # named games -> Title Case
+        name = name.replace("_", " ").title()
     return name + ".zip"
 
 
@@ -43,19 +51,21 @@ class AlfAdapter(Adapter):
     def _load(self) -> None:
         if self._entries is not None:
             return
-        r = self._client.get(PAGE)
-        r.raise_for_status()
         out: list[Entry] = []
         seen: set[str] = set()
-        for href in HREF.findall(r.text):          # page order = ALF-1..10, compilation
-            if href in seen:
-                continue
-            seen.add(href)
-            # Only cartridge dumps (Alf-*); skip the raw system EPROM dumps
-            # (Original_ROM_27c256/27c010) — the firmware has the system ROM built in.
-            if not href.rsplit("/", 1)[-1].lower().startswith("alf"):
-                continue
-            out.append(Entry(is_dir=False, name=_display(href), size=0, url=BASE + href))
+        for page in PAGES:                         # page order = ALF-1..10, compilation, then dopsoft
+            r = self._client.get(page)
+            r.raise_for_status()
+            for href in HREF.findall(r.text):
+                if href in seen:
+                    continue
+                seen.add(href)
+                # Skip the raw system EPROM dumps (Original_ROM_27c256/27c010) —
+                # the firmware has the system ROM built in. Everything else under
+                # doc/alf/ is a cartridge dump (Alf-N or a named game).
+                if "original" in href.rsplit("/", 1)[-1].lower():
+                    continue
+                out.append(Entry(is_dir=False, name=_display(href), size=0, url=BASE + href))
         self._entries = out
 
     def list(self, path: str) -> list[Entry]:
