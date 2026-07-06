@@ -9,6 +9,7 @@ over TLS (TlsSock) and downloads the mirrored files directly.
 Output layout (under <out>):
 
     sites.tsv                 "<id>\\t<display>\\n" per source        (== /v1/sites)
+    speedtest.bin             512 KB incompressible blob (Speed Test NET target)
     <site>/_root.tsv          root directory listing of a site
     <site>/<slug>.tsv         listing of directory <path>  (slug == slug(path))
     <site>/files/<slug>/<fn>  mirrored file bytes (the download targets)
@@ -148,6 +149,30 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
     return files_done
 
 
+SPEEDTEST_NAME = "speedtest.bin"
+SPEEDTEST_SIZE = 512 * 1024
+
+
+def write_speedtest(outroot: str, size: int = SPEEDTEST_SIZE) -> None:
+    """Emit a deterministic incompressible blob at the Pages root.
+
+    Target for the pico-spec Speed Test NET benchmark. Deterministic (SHA-256
+    counter stream) so the file is byte-identical across builds and CDN caches
+    stay warm; pseudo-random so gzip on the wire can't shrink it and
+    Content-Length always equals the body size (the firmware's HttpsGet
+    rejects chunked responses)."""
+    import hashlib
+    with open(os.path.join(outroot, SPEEDTEST_NAME), "wb") as fh:
+        written = 0
+        counter = 0
+        while written < size:
+            block = hashlib.sha256(counter.to_bytes(8, "little")).digest()
+            fh.write(block[: size - written])
+            written += len(block)
+            counter += 1
+    print(f"wrote {outroot}/{SPEEDTEST_NAME} ({size} bytes)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Static catalog exporter for GitHub Pages")
     ap.add_argument("--out", required=True, help="output root (the Pages site dir)")
@@ -180,6 +205,8 @@ def main() -> None:
     with open(os.path.join(args.out, "sites.tsv"), "w", encoding="utf-8") as fh:
         fh.write("".join(l + "\n" for l in manifest))
     print(f"wrote {args.out}/sites.tsv ({len(manifest)} sources)")
+
+    write_speedtest(args.out)
 
 
 if __name__ == "__main__":

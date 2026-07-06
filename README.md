@@ -111,6 +111,10 @@ touches the live site.
 
 ```
 sites.tsv                 "<id>\t<display>\n" per source        (== /v1/sites)
+speedtest.bin             512 KB incompressible blob — download target for the
+                          pico-spec Speed Test NET benchmark (deterministic
+                          SHA-256 counter stream: byte-identical across builds,
+                          gzip-proof so Content-Length == body size)
 <site>/_root.tsv          root directory listing of a site
 <site>/<slug>.tsv         listing of directory <path>  (slug == path, '' → _root, '/' → '~')
 <site>/files/<slug>/<fn>  mirrored file bytes (the download targets)
