@@ -20,6 +20,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "sc":
             from .sc import ScAdapter      # lazy (httpx)
             reg["sc"] = ScAdapter()
+        elif sid == "wos":
+            from .sc import WosAdapter     # same ZXDB parse as sc, wos.net links
+            reg["wos"] = WosAdapter()
         elif sid == "zxart":
             from .zxart import ZxartAdapter  # lazy (httpx) — JSON export API
             reg["zxart"] = ZxartAdapter()

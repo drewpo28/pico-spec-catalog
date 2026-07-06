@@ -77,12 +77,13 @@ curl -OJ 'http://localhost:8080/v1/get?site=vtrd&path=A&name=<file>'
 ## Adapters (`app/adapters/`)
 
 Enable sources with `CATALOG_SITES` (comma/space list; code default `vtrd`, the
-Action builds `vtrd sc zxart`). The order is the order shown in the device picker.
+Action builds `vtrd sc wos zxart alf`). The order is the order shown in the device picker.
 
 | id      | source                       | how |
 |---------|------------------------------|-----|
 | `vtrd`  | [vtrd.in](https://vtrd.in/) | HTML scrape (no API; 403s non-browser UAs → crawl runs server-side) |
 | `sc`    | [Spectrum Computing](https://spectrumcomputing.co.uk/) | listing built from the ZXDB MySQL dump; files served from `spectrumcomputing.co.uk` (device TLS handles its cert via mbedTLS `SHA384_C`) |
+| `wos`   | [worldofspectrum.net](https://worldofspectrum.net/) | same ZXDB listing as `sc` (one shared dump parse); files served from the `worldofspectrum.net` mirror |
 | `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
 
 Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
@@ -145,6 +146,7 @@ device just follows the `F`-line's 4th column.
 pip install -r requirements.txt
 python3 gen_static.py --out _site --site vtrd --max-files 400 --max-depth 2
 python3 gen_static.py --out _site --site sc
+python3 gen_static.py --out _site --site wos
 python3 gen_static.py --out _site --site zxart
 # _site/ is the Pages root; sites.tsv + per-site trees live there.
 ```
@@ -159,7 +161,7 @@ This repo **is** the dedicated catalog, so deployment is just enabling Pages:
 1. Push this repo to GitHub (`drewpo28/pico-spec-catalog`).
 2. **Settings → Pages → Source: GitHub Actions**.
 3. **Actions → Build catalog (Pages) → Run workflow** (or wait for the daily cron
-   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc zxart"`, `MAX_FILES=400`,
+   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart alf"`, `MAX_FILES=400`,
    `MAX_DEPTH=4` by default) and deploys `_site/` to Pages.
 4. The catalog is then live at `https://drewpo28.github.io/pico-spec-catalog/` — which
    is the device's built-in default (`catalog_host` empty).

@@ -52,6 +52,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "sc":
         from app.adapters.sc import ScAdapter          # lazy (needs httpx)
         return ScAdapter()
+    if site == "wos":
+        from app.adapters.sc import WosAdapter         # same ZXDB parse as sc,
+        return WosAdapter()                            # worldofspectrum.net links
     if site == "zxart":
         from app.adapters.zxart import ZxartAdapter    # lazy (needs httpx)
         return ZxartAdapter()
