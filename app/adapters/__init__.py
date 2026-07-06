@@ -29,6 +29,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "alf":
             from .alf import AlfAdapter      # lazy (httpx) — zxbyte.org cartridges
             reg["alf"] = AlfAdapter()
+        elif sid == "s4e":
+            from .s4e import S4eAdapter      # lazy (httpx) — spectrum4ever.org releases
+            reg["s4e"] = S4eAdapter()
     return reg
 
 
