@@ -2,15 +2,25 @@
 
 spectrum4ever.org lists ~6100 tape releases (cracked/translated versions with
 per-release cracker credits) on one page per letter — no pagination, no API, no
-UA filtering. Rows are rigid markup, parsed with regexes:
+UA filtering. Rows are rigid markup, parsed with regexes (2026-07 redesign:
+divs instead of table rows, semantic release__* classes, the blue T_B_ flags
+column dropped, a grn "release__special" span with verbose Cyrillic loader
+details added — not shown, too long for the 36-col OSD):
 
-    <img src="js/tape.png"> <a ... href='download.php?t=fulltape&id=N'>TITLE</a>
-    <span class="cian">.TAP</span> ... <a ... by=cracker">CRACKER</a>
-    <span class="red">NOTE</span> <span class="blue">T_B_</span>
-    <span class="magn">LANG</span>
+    <img class="icon" src="js/tape.png">
+    <a ... href='download.php?t=fulltape&id=N'>TITLE</a>
+    <span class="release__format cian">.TAP</span>
+    <a ... by=cracker">CRACKER</a>
+    <span class="release__comment red">NOTE</span>
+    <span class="release__special grn">(loader details)</span>
+    <span class="release__lang magn">LANG</span>
+    <span class="release__actions">…play/download buttons…</span>
 
-Display name = "TITLE .TAP  CRACKER  NOTE  FLAGS LANG" (flags "____" and empty
-fields omitted) — e.g. "A TEAM .TAP  ANDREW STRIKES CODE  T___ SPN".
+A row = the chunk between consecutive tape.png imgs, cut at release__actions
+(the player area has its own cian/magn spans that must not leak into fields).
+
+Display name = "TITLE .TAP  CRACKER  NOTE  LANG" (empty fields omitted) —
+e.g. "A TEAM .TAP  ANDREW STRIKES CODE  SPN".
 
 download.php serves the RAW .TAP/.TZX (no zip). The device names the saved file
 after the locator's last path segment (HttpCatalogFs::downloadBasename), so the
@@ -50,26 +60,26 @@ LETTERS: "list[tuple[str, str]]" = (
     + [("RUS", "А-Я")]
 )
 
+_ROW_SPLIT = re.compile(r'<img[^>]*src="js/tape\.png"[^>]*>')
 _ROW_ID = re.compile(r"download\.php\?t=fulltape&id=(\d+)'>([^<]*)</a>")
-_ROW_EXT = re.compile(r'class="cian">([^<]*)</span>')
+_ROW_EXT = re.compile(r'class="release__format[^"]*">([^<]*)</span>')
 _ROW_CRK = re.compile(r'by=cracker">([^<]*)</a>')
-_ROW_RED = re.compile(r'class="red">([^<]*)</span>')
-_ROW_BLUE = re.compile(r'class="blue">([^<]*)</span>')
-_ROW_MAGN = re.compile(r'class="magn">([^<]*)</span>')
+_ROW_RED = re.compile(r'class="release__comment[^"]*">([^<]*)</span>')
+_ROW_MAGN = re.compile(r'class="release__lang[^"]*">([^<]*)</span>')
 _FN_SAFE = re.compile(r"[^A-Za-z0-9._()-]+")
 
 
 def _parse_rows(html: str):
-    """(id, title, ext, cracker, note, flags, lang) per release row."""
+    """(id, title, ext, cracker, note, lang) per release row."""
     out = []
-    for ch in html.split('<img src="js/tape.png">')[1:]:
-        ch = ch.split("</tr>", 1)[0]
+    for ch in _ROW_SPLIT.split(html)[1:]:
+        ch = ch.split("release__actions", 1)[0]
         m = _ROW_ID.search(ch)
         if not m:
             continue
         grab = lambda rx: (lambda g: g.group(1).strip() if g else "")(rx.search(ch))
         out.append((m.group(1), m.group(2).strip(), grab(_ROW_EXT),
-                    grab(_ROW_CRK), grab(_ROW_RED), grab(_ROW_BLUE), grab(_ROW_MAGN)))
+                    grab(_ROW_CRK), grab(_ROW_RED), grab(_ROW_MAGN)))
     return out
 
 
@@ -95,16 +105,14 @@ class S4eAdapter(Adapter):
         self._cache: dict[str, tuple[float, list[Entry]]] = {}
 
     @staticmethod
-    def _display(title, ext, cracker, note, flags, lang) -> str:
+    def _display(title, ext, cracker, note, lang) -> str:
         parts = [f"{title} {ext}"]
         if cracker:
             parts.append(cracker)
         if note:
             parts.append(note[:24])
-        tail = " ".join(x for x in (flags if flags and flags != "____" else "",
-                                    lang) if x)
-        if tail:
-            parts.append(tail)
+        if lang:
+            parts.append(lang)
         return "  ".join(parts)
 
     def _letter(self, token: str) -> "list[Entry]":
@@ -121,10 +129,10 @@ class S4eAdapter(Adapter):
             rows = []
         entries: list[Entry] = []
         seen: set[str] = set()
-        for rid, title, ext, cracker, note, flags, lang in rows:
+        for rid, title, ext, cracker, note, lang in rows:
             if cracker.lower() == "n/a":
                 cracker = ""
-            name = self._display(title, ext, cracker, note, flags, lang) \
+            name = self._display(title, ext, cracker, note, lang) \
                        .replace("\t", " ")
             if name in seen:                    # same title+cracker+note → number it
                 i = 2
