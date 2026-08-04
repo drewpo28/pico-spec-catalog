@@ -77,13 +77,18 @@ def slug(path: str) -> str:
     """Deterministic, filesystem- and URL-safe name for a directory path.
     "" → "_root"; '/' → '~'; other unsafe chars → '_'. ASCII only — Cyrillic
     dir names must not leak into the request path — and any lossy replacement
-    appends a short hash of the full path, so "Jump (v2)" and "Jump [v2]"
-    (or two Cyrillic titles flattened to underscores) can't collide."""
+    appends an FNV-1a 32 hash of the full path, so "Jump (v2)" and "Jump [v2]"
+    (or two Cyrillic titles flattened to underscores) can't collide.
+    MIRRORED by the firmware's HttpCatalogFs slugPath()/catvHash(), which
+    recomputes slugs from browse paths — the algorithm (incl. the hash) must
+    stay byte-identical on both sides."""
     if path == "":
         return "_root"
+    raw = path.encode()          # BYTE-wise like the firmware (UTF-8 → n×'_')
     out = []
     lossy = False
-    for ch in path:
+    for b in raw:
+        ch = chr(b)
         if ch == "/":
             out.append("~")
         elif ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ("0" <= ch <= "9") or ch in "._-":
@@ -93,8 +98,10 @@ def slug(path: str) -> str:
             lossy = True
     s = "".join(out)
     if lossy:
-        import hashlib
-        s += "-" + hashlib.md5(path.encode()).hexdigest()[:6]
+        h = 2166136261
+        for b in raw:
+            h = ((h ^ b) * 16777619) & 0xFFFFFFFF
+        s += f"-{h:08x}"
     return s
 
 
