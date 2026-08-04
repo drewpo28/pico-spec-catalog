@@ -13,7 +13,8 @@ HTML parsing is needed:
 
 We page through ALL releases once to pick the best-format downloadable per prod,
 then page through ALL prods, keeping only the two sections the user asked for and
-bucketing each by the title's first character (0-9 + A-Z), like the vtrd/SC trees.
+bucketing each by the title's first character (0-9 + A-Z + Russian for Cyrillic
+titles), like the vtrd/SC trees.
 Every file Entry carries the direct release URL → the static exporter emits it in
 link mode (the device downloads the .zip itself; nothing is mirrored).
 
@@ -23,6 +24,7 @@ Built once per catalog run (cron Action), so the ~165 API calls are amortised.
 from __future__ import annotations
 
 import html
+import sys
 import time
 
 import httpx
@@ -30,9 +32,13 @@ import httpx
 from .base import Adapter, Entry
 
 API = "https://zxart.ee/api"
+
+
+class _EmptyExport(Exception):
+    """Empty-body 200 or HTTP 5xx — a poisoned record inside the window."""
 PAGE = 1000                       # limit:5000 errors; 1000 is safe + reliable
 SECTIONS = ("Games", "Demoscene")  # categoriesString first segment
-LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+LETTERS = ["Russian", "0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 # Download-format preference: native TR-DOS first, then tape, then snapshots.
 FMT_RANK = {"trd": 0, "scl": 1, "fdi": 2, "udi": 3, "dsk": 4,
             "tap": 5, "tzx": 6, "z80": 7, "sna": 8}
@@ -40,7 +46,11 @@ FMT_RANK = {"trd": 0, "scl": 1, "fdi": 2, "udi": 3, "dsk": 4,
 
 def _bucket(title: str) -> str:
     c = title[:1].upper()
-    return c if "A" <= c <= "Z" else "0-9"
+    if "A" <= c <= "Z":
+        return c
+    if "А" <= c <= "Я" or c == "Ё":   # Cyrillic titles get their own shelf
+        return "Russian"
+    return "0-9"                       # digits + everything else (Ø, É, quotes…)
 
 
 class ZxartAdapter(Adapter):
@@ -48,37 +58,94 @@ class ZxartAdapter(Adapter):
     name = "ZX-Art"
 
     def __init__(self):
+        # A cold (uncached) 1000-row export page takes the server 30+ s to
+        # generate — a 30 s timeout made every cold page look like a failure
+        # and silently truncated the crawl (hw-hit: catalog stopped at release
+        # id ~447832 of ~601k, dropping every prod newer than ~2023).
         self._client = httpx.Client(
             headers={"User-Agent": "pico-spec-catalog/1.0"},
-            timeout=30.0, follow_redirects=True,
+            timeout=120.0, follow_redirects=True,
         )
         # section -> letter -> [Entry]; built lazily on first list().
         self._index: dict[str, dict[str, list[Entry]]] | None = None
 
     # ── API helpers ──────────────────────────────────────────────────────────--
     def _get(self, url: str) -> dict:
-        for attempt in range(4):
+        err: Exception | None = None
+        for attempt in range(5):
             try:
                 r = self._client.get(url)
                 r.raise_for_status()
+            except Exception as e:  # noqa: BLE001 — transient API hiccup, retry
+                # A 5xx here is (empirically) as deterministic as the empty
+                # body: zxProd windows around offset 43000 500-error until the
+                # poisoned record is excluded. Send it to the bisect path; a
+                # genuinely transient 5xx just re-resolves in the sub-windows.
+                status = (getattr(getattr(e, "response", None), "status_code", None)
+                          or getattr(e, "code", None))
+                if isinstance(status, int) and status >= 500:
+                    raise _EmptyExport(url) from e
+                err = e
+                time.sleep(2.0 + 2.0 * attempt)
+                continue
+            try:
                 return r.json()
-            except Exception:  # noqa: BLE001 — transient API hiccup, retry
-                time.sleep(1.0 + attempt)
-        return {}
+            except Exception as e:  # noqa: BLE001
+                # HTTP 200 with an empty/unparseable body: the server-side
+                # export serializer died on a poisoned record inside this
+                # window. Deterministic — retrying the same window won't help,
+                # the caller must bisect around the record instead.
+                raise _EmptyExport(url) from e
+        # Never mask a failed page as an empty one: an empty result ends the
+        # paging loop, and a truncated catalog would silently replace the full
+        # one on Pages. Raising fails the whole build instead (previous deploy
+        # stays live).
+        raise RuntimeError(f"zxart API failed after retries: {url}: {err!r}")
+
+    def _window(self, entity: str, start: int, count: int) -> tuple[int, list]:
+        """Rows [start, start+count) + totalAmount; bisects around poisoned rows.
+
+        Some records crash the server's export serializer (HTTP 200, empty
+        body — hw-found 2026-08-04 at zxRelease offset 89084, a release id in
+        448216..448222), killing the whole window deterministically. Every
+        nightly build died on that same page, which is what truncated the
+        published catalog at release id 447832. Split the window down to the
+        single bad record and skip just it."""
+        for retry in (False, True):
+            try:
+                d = self._get(f"{API}/types:{entity}/language:eng/"
+                              f"start:{start}/limit:{count}/export:{entity}")
+                rows = (d.get("responseData") or {}).get(entity) or []
+                return int(d.get("totalAmount", 0) or 0), rows
+            except _EmptyExport:
+                if count > 1:
+                    half = count // 2
+                    t1, a = self._window(entity, start, half)
+                    t2, b = self._window(entity, start + half, count - half)
+                    return (t1 or t2), a + b
+        print(f"  ! zxart {entity}: skipping poisoned record at offset {start}",
+              file=sys.stderr)
+        return 0, []
 
     def _paged(self, entity: str):
         start = 0
+        got = 0
+        total = 0
         while True:
-            d = self._get(f"{API}/types:{entity}/language:eng/"
-                          f"start:{start}/limit:{PAGE}/export:{entity}")
-            rows = (d.get("responseData") or {}).get(entity) or []
-            if not rows:
-                break
+            t, rows = self._window(entity, start, PAGE)
+            total = t or total
+            got += len(rows)
             yield from rows
-            total = int(d.get("totalAmount", 0) or 0)
             start += PAGE
-            if start >= total:
+            if total == 0 or start >= total:
                 break
+        # Pages may legally return slightly fewer rows than `limit` (items
+        # hidden from the language:eng view are dropped after slicing, ~1%),
+        # and poisoned records are skipped one by one; anything beyond a few
+        # percent means real truncation (or a 5xx storm skipping wholesale).
+        if got < total * 0.95:
+            raise RuntimeError(
+                f"zxart {entity}: fetched only {got} of {total} rows — truncated export")
 
     @staticmethod
     def _clean(s: str) -> str:

@@ -112,6 +112,11 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
         try:
             entries = adapter.list(path)
         except Exception as e:  # noqa: BLE001 — degrade gracefully, skip this dir
+            if path == "":
+                # A failed root listing means the whole site came out empty —
+                # deploying that would replace a full catalog on Pages with
+                # nothing. Fail the build; the previous deploy stays live.
+                raise SystemExit(f"{adapter.id}: root listing failed: {e}")
             print(f"  ! list({path!r}) failed: {e}", file=sys.stderr)
             entries = []
 
