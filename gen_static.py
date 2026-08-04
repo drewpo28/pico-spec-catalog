@@ -74,19 +74,28 @@ def clean(s: str) -> str:
 
 
 def slug(path: str) -> str:
-    """Deterministic, filesystem-safe name for a directory path.
-    "" → "_root"; '/' → '~'; other unsafe chars → '_'."""
+    """Deterministic, filesystem- and URL-safe name for a directory path.
+    "" → "_root"; '/' → '~'; other unsafe chars → '_'. ASCII only — Cyrillic
+    dir names must not leak into the request path — and any lossy replacement
+    appends a short hash of the full path, so "Jump (v2)" and "Jump [v2]"
+    (or two Cyrillic titles flattened to underscores) can't collide."""
     if path == "":
         return "_root"
     out = []
+    lossy = False
     for ch in path:
         if ch == "/":
             out.append("~")
-        elif ch.isalnum() or ch in "._-":
+        elif ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ("0" <= ch <= "9") or ch in "._-":
             out.append(ch)
         else:
             out.append("_")
-    return "".join(out)
+            lossy = True
+    s = "".join(out)
+    if lossy:
+        import hashlib
+        s += "-" + hashlib.md5(path.encode()).hexdigest()[:6]
+    return s
 
 
 def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,

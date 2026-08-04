@@ -11,10 +11,13 @@ HTML parsing is needed:
         a direct `file` URL (https://zxart.ee/release/id:<id>/<name>) and a
         `releaseStructure` whose root element gives the byte size.
 
-We page through ALL releases once to pick the best-format downloadable per prod,
+We page through ALL releases once, collecting every downloadable one per prod,
 then page through ALL prods, keeping only the two sections the user asked for and
 bucketing each by the title's first character (0-9 + A-Z + Russian for Cyrillic
-titles), like the vtrd/SC trees.
+titles), like the vtrd/SC trees. A prod with a single downloadable release is a
+flat file entry; one with several (languages / formats / versions) becomes a
+directory whose entries are the releases themselves (named by their download
+filename, best format first), so the user can pick the version.
 Every file Entry carries the direct release URL → the static exporter emits it in
 link mode (the device downloads the .zip itself; nothing is mirrored).
 
@@ -26,6 +29,7 @@ from __future__ import annotations
 import html
 import sys
 import time
+from urllib.parse import unquote
 
 import httpx
 
@@ -68,6 +72,8 @@ class ZxartAdapter(Adapter):
         )
         # section -> letter -> [Entry]; built lazily on first list().
         self._index: dict[str, dict[str, list[Entry]]] | None = None
+        # "section/letter/prod-name" -> [release Entry] for multi-release prods.
+        self._prod_rel: dict[str, list[Entry]] = {}
 
     # ── API helpers ──────────────────────────────────────────────────────────--
     def _get(self, url: str) -> dict:
@@ -153,9 +159,11 @@ class ZxartAdapter(Adapter):
         return s.replace("\t", " ").replace("\r", " ").replace("\n", " ").replace("/", "_").strip()
 
     # ── index build ──────────────────────────────────────────────────────────--
-    def _best_releases(self) -> dict[int, tuple[str, int]]:
-        """prodId -> (direct file URL, byte size) for the best-format release."""
-        best: dict[int, tuple[int, str, int]] = {}  # pid -> (rank, url, size)
+    def _releases_by_prod(self) -> dict[int, list[tuple[int, str, int, str]]]:
+        """prodId -> [(fmt rank, display name, byte size, URL)] — every
+        downloadable release; the display name is the download filename
+        (carries language / format / version, e.g. vsjo-kubikami-1.0-cs.trd.zip)."""
+        by_prod: dict[int, list[tuple[int, str, int, str]]] = {}
         for r in self._paged("zxRelease"):
             url = r.get("file") or ""
             pid = r.get("prodId")
@@ -168,26 +176,26 @@ class ZxartAdapter(Adapter):
                 if el.get("parentId") == 0:
                     size = int(el.get("size", 0) or 0)
                     break
-            cur = best.get(pid)
-            if cur is None or rank < cur[0]:
-                best[pid] = (rank, url, size)
-        return {pid: (url, size) for pid, (rank, url, size) in best.items()}
+            name = self._clean(unquote(url.rstrip("/").split("/")[-1])) \
+                or f"release {r.get('id')}"
+            by_prod.setdefault(pid, []).append((rank, name, size, url))
+        return by_prod
 
     def _build(self) -> None:
         if self._index is not None:
             return
-        rel = self._best_releases()
+        rel = self._releases_by_prod()
         idx: dict[str, dict[str, list[Entry]]] = {s: {l: [] for l in LETTERS} for s in SECTIONS}
         seen: dict[str, set[str]] = {s: set() for s in SECTIONS}
+        prod_rel: dict[str, list[Entry]] = {}
 
         for p in self._paged("zxProd"):
             sec = (p.get("categoriesString") or "").split("/")[0]
             if sec not in SECTIONS:
                 continue
-            r = rel.get(p.get("id"))
-            if not r:
+            rs = rel.get(p.get("id"))
+            if not rs:
                 continue  # no downloadable release → skip
-            url, size = r
             title = self._clean(p.get("title") or "")
             if not title:
                 continue
@@ -200,11 +208,29 @@ class ZxartAdapter(Adapter):
                     name = f"{title} ({year}) {i}" if year else f"{title} {i}"
                     i += 1
             seen[sec].add(name)
-            idx[sec][_bucket(title)].append(Entry(False, name, size, url=url))
+            letter = _bucket(title)
+            if len(rs) == 1:
+                _rank, _rname, size, url = rs[0]
+                idx[sec][letter].append(Entry(False, name, size, url=url))
+            else:
+                # several downloadable releases (languages / formats / versions):
+                # the prod becomes a directory and the user picks the release.
+                idx[sec][letter].append(Entry(True, name, 0))
+                files: list[Entry] = []
+                used: set[str] = set()
+                for _rank, rname, size, url in sorted(rs, key=lambda t: (t[0], t[1].lower())):
+                    n, i = rname, 2
+                    while n in used:
+                        n = f"{rname} ({i})"
+                        i += 1
+                    used.add(n)
+                    files.append(Entry(False, n, size, url=url))
+                prod_rel[f"{sec}/{letter}/{name}"] = files
 
         for sec in SECTIONS:
             for l in LETTERS:
                 idx[sec][l].sort(key=lambda e: e.name.lower())
+        self._prod_rel = prod_rel
         self._index = idx
 
     # ── Adapter API ──────────────────────────────────────────────────────────--
@@ -218,7 +244,11 @@ class ZxartAdapter(Adapter):
             return []
         if len(parts) == 1:                             # section → non-empty letters
             return [Entry(True, l, 0) for l in LETTERS if self._index[sec][l]]
-        return list(self._index[sec].get(parts[1], [])) # letter → files
+        if len(parts) == 2:                             # letter → prods (files or dirs)
+            return list(self._index[sec].get(parts[1], []))
+        if len(parts) == 3:                             # multi-release prod → releases
+            return list(self._prod_rel.get("/".join(parts), []))
+        return []
 
     def fetch(self, path: str, name: str) -> tuple[bytes, str]:
         """Dynamic /v1 path: download the entry's release .zip (link mode skips this)."""
