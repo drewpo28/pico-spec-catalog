@@ -1,6 +1,5 @@
-# TEMPORARY diagnostic — round 2: find a PUBLIC TOSEC ZX Spectrum item on
-# archive.org (tosec-main is login-gated) and capture s4e's new row markup.
-# Runs only on the working branch; deleted before merging.
+# TEMPORARY diagnostic — round 3: map the public TOSEC item's tree and verify
+# redirect-free datanode URLs. Deleted before merging.
 name: Debug source fetch
 
 on:
@@ -19,7 +18,8 @@ jobs:
       - name: Probe sources
         run: |
           python3 - <<'EOF'
-          import httpx, json, re, traceback
+          import httpx, traceback
+          from collections import Counter
           from urllib.parse import quote
 
           UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -33,73 +33,46 @@ jobs:
               except Exception:
                   traceback.print_exc()
 
-          cands = []
-          def search():
-              for q in ('title:(TOSEC) AND title:("ZX Spectrum")',
-                        'identifier:tosec* AND mediatype:software',
-                        'collection:tosec'):
-                  r = c.get("https://archive.org/advancedsearch.php",
-                            params={"q": q, "fl[]": "identifier", "rows": "60",
-                                    "output": "json", "sort[]": "publicdate desc"})
-                  docs = r.json().get("response", {}).get("docs", [])
-                  ids = [d["identifier"] for d in docs]
-                  print(f"q={q!r}: {len(ids)} -> {ids}")
-                  cands.extend(i for i in ids if i not in cands)
-          step("search candidates", search)
+          IDENT = "ZXSpectrumTOSECSetV20171101LadyEklipse"
+          j = {}
+          def census():
+              global j
+              j = c.get(f"https://archive.org/metadata/{IDENT}").json()
+              files = j.get("files", [])
+              print("server:", j.get("server"), "dir:", j.get("dir"), "files:", len(files))
+              top = Counter(f["name"].split("/")[0] for f in files)
+              print("top-level:", dict(top.most_common(30)))
+              for sec in ("Games", "Demos"):
+                  sub = Counter(f["name"].split("/")[1] for f in files
+                                if f["name"].startswith(sec + "/") and f["name"].count("/") >= 2)
+                  print(f"{sec}/ second level:", dict(sub.most_common(30)))
+              exts = Counter(f["name"].rsplit(".", 1)[-1].lower() for f in files)
+              print("extensions:", dict(exts.most_common(10)))
+              for probe in ("Games/[TAP]/", "Games/[TRD]/", "Demos/[TRD]/", "Demos/[TAP]/"):
+                  names = [f["name"] for f in files if f["name"].startswith(probe)][:4]
+                  print(probe, "->", names)
+          step(f"census {IDENT}", census)
 
-          good = []
-          def vet():
-              for ident in cands[:40]:
-                  try:
-                      j = c.get(f"https://archive.org/metadata/{ident}").json()
-                  except Exception as e:
-                      print(ident, "meta failed:", e); continue
-                  md = j.get("metadata", {})
-                  restricted = md.get("access-restricted-item")
-                  files = j.get("files", [])
-                  zx = [f["name"] for f in files
-                        if "ZX Spectrum" in f.get("name", "") and f["name"].endswith(".zip")]
-                  games = [n for n in zx if "- Games -" in n or "/Games/" in n]
-                  demos = [n for n in zx if "- Demos -" in n or "/Demos/" in n]
-                  print(f"{ident}: restricted={restricted} files={len(files)} "
-                        f"zx-zips={len(zx)} games={len(games)} demos={len(demos)} "
-                        f"server={j.get('server')} dir={j.get('dir')}")
-                  if restricted not in ("true", True) and (games or demos):
-                      good.append((ident, j, games, demos))
-                      for n in (games[:3] + demos[:3]):
-                          print("   ", n)
-              print("GOOD:", [g[0] for g in good])
-          step("vet candidates", vet)
+          def datanode():
+              files = j.get("files", [])
+              sample = next(f["name"] for f in files
+                            if f["name"].startswith("Games/") and f["name"].endswith(".zip"))
+              base = f"https://{j['server']}{j['dir']}/{quote(sample)}"
+              nc = httpx.Client(timeout=60, follow_redirects=False, headers={"User-Agent": UA})
+              for u in (base, base + "?fn=/test.zip"):
+                  r = nc.get(u, headers={"Range": "bytes=0-99"})
+                  print(r.status_code, r.headers.get("content-range"),
+                        r.headers.get("location", ""), "<-", u[:160])
+          step("direct datanode URL (no redirects allowed)", datanode)
 
-          def tryview():
-              if not good:
-                  print("no unrestricted candidate found"); return
-              ident, j, games, demos = good[0]
-              zp = (demos or games)[0]
-              u = f"https://archive.org/download/{ident}/{quote(zp)}/"
-              r = c.get(u)
-              print("zip view:", r.status_code, "final:", str(r.url)[:200], "len:", len(r.text))
-              rows = re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S | re.I)
-              print("tr rows:", len(rows), "anchors:", r.text.count("<a "))
-              for chunk in rows[:4]:
-                  print("ROW:", chunk[:400].replace("\n", " "))
-              # ranged read of the zip itself (device-style direct download check)
-              r2 = c.get(f"https://archive.org/download/{ident}/{quote(zp)}",
-                         headers={"Range": "bytes=0-99"})
-              print("range:", r2.status_code, r2.headers.get("content-range"),
-                    "final:", str(r2.url)[:160])
-          step("zip view on best candidate", tryview)
-
-          def s4e_rows():
-              t = c.get("https://spectrum4ever.org/fulltape.php?go=releases&letter=A").text
-              print("len:", len(t))
-              i = t.find("download.php?t=fulltape")
-              print("--- ctx around first download.php ---")
-              print(t[max(0, i - 1200):i + 600].replace("\n", " "))
-              j2 = t.find("download.php?t=fulltape", i + 1)
-              print("--- ctx around second download.php ---")
-              print(t[max(0, j2 - 1200):j2 + 600].replace("\n", " "))
-              for pat in ("release__", "js/tape", "js/disk", "icon", "row"):
-                  print(pat, "count:", t.count(pat))
-          step("s4e row markup", s4e_rows)
+          def others():
+              for ident in ("zx_spectrum_tosec_set_september_2023",
+                            "zx-spectrum-tosec-set-v-2020-02-18-lady-eklipse",
+                            "Sinclair_ZX_Spectrum_TOSEC_2012_04_23"):
+                  m = c.get(f"https://archive.org/metadata/{ident}").json()
+                  names = [(f["name"], f.get("size")) for f in m.get("files", [])]
+                  print(f"\n{ident}: restricted={m.get('metadata', {}).get('access-restricted-item')}")
+                  for n, s in names[:25]:
+                      print("   ", n, s)
+          step("alternative items", others)
           EOF
