@@ -87,7 +87,7 @@ Action builds `vtrd sc wos zxart s4e alf tosec`). The order is the order shown i
 | `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
 | `s4e`   | [spectrum4ever.org](https://spectrum4ever.org/) | Full Tape Crack Pack releases; HTML scrape, raw .TAP/.TZX via `download.php` (`&fn=/…` names the saved file) |
 | `alf`   | [zxbyte.org](http://zxbyte.org/) | ALF cartridge images (HTML scrape) |
-| `tosec` | [TOSEC on archive.org](https://archive.org/download/tosec-main/Sinclair/ZX%20Spectrum/) | ZX Spectrum Demos + Games TOSEC packs, re-cut as `<section>/<format>/<letter>` — zip contents listed via archive.org's zip view, single files streamed out of the packs from the datanode (`view_archive.php`) |
+| `tosec` | [ZX Spectrum TOSEC set on archive.org](https://archive.org/details/ZXSpectrumTOSECSetV20171101LadyEklipse) | Demos + Games as `<section>/<format>/<letter>` from the public v2017-11-01 set (one small zip per title; the canonical `tosec-main` item is login-gated). No scraping — the whole catalog comes from the item's metadata API; the device downloads per-title zips straight from the datanode and unzips them itself |
 
 Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
 `app/adapters/base.py`) and registering it in `app/adapters/__init__.py` — the
