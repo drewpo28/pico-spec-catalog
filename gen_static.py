@@ -183,8 +183,8 @@ def write_speedtest(outroot: str, size: int = SPEEDTEST_SIZE) -> None:
     Target for the pico-spec Speed Test NET benchmark. Deterministic (SHA-256
     counter stream) so the file is byte-identical across builds and CDN caches
     stay warm; pseudo-random so gzip on the wire can't shrink it and
-    Content-Length always equals the body size (the firmware's HttpsGet
-    rejects chunked responses)."""
+    Content-Length always equals the body size (the benchmark needs a
+    byte-exact length up front to compute the rate)."""
     import hashlib
     with open(os.path.join(outroot, SPEEDTEST_NAME), "wb") as fh:
         written = 0
