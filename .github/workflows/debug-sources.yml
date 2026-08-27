@@ -1,5 +1,6 @@
-# TEMPORARY diagnostic — what does tosecdev.org/downloads actually serve?
-# Deleted after the probe.
+# TEMPORARY diagnostic — can the September-2023 public ZX Spectrum TOSEC set
+# (one zip per section) serve per-member listings + downloads anonymously,
+# with Content-Length (the firmware rejects chunked)? Deleted after the probe.
 name: Debug source fetch
 
 on:
@@ -15,14 +16,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install httpx
-      - name: Probe tosecdev.org
+      - name: Probe zx_spectrum_tosec_set_september_2023
         run: |
           python3 - <<'EOF'
-          import httpx, re, traceback
+          import httpx, re, time, traceback
+          from urllib.parse import quote, unquote
 
           UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-          c = httpx.Client(timeout=120, follow_redirects=True, headers={"User-Agent": UA})
+          c = httpx.Client(timeout=300, follow_redirects=True, headers={"User-Agent": UA})
+          IDENT = "zx_spectrum_tosec_set_september_2023"
 
           def step(label, fn):
               print(f"\n===== {label} =====", flush=True)
@@ -31,43 +34,66 @@ jobs:
               except Exception:
                   traceback.print_exc()
 
-          def clean(s):
-              return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s)).strip()
+          j = {}
+          def meta():
+              global j
+              j = c.get(f"https://archive.org/metadata/{IDENT}").json()
+              print("server:", j.get("server"), "dir:", j.get("dir"),
+                    "workable:", j.get("workable_servers"))
+          step("metadata", meta)
 
-          links = []
-          def downloads():
-              r = c.get("https://www.tosecdev.org/downloads")
-              print("status:", r.status_code, "len:", len(r.text))
-              for href, txt in re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                                          r.text, re.S | re.I):
-                  t = clean(txt)
-                  if "download" in href.lower() and t and len(t) < 90:
-                      links.append((href, t))
-              seen = set()
-              for h, t in links:
-                  if h in seen: continue
-                  seen.add(h)
-                  print(f"  {t!r:60} -> {h[:120]}")
-          step("downloads index", downloads)
+          members = []
+          def demos_listing():
+              t0 = time.time()
+              r = c.get(f"https://archive.org/download/{IDENT}/Demos.zip/")
+              print("status:", r.status_code, f"len={len(r.text)} in {time.time()-t0:.1f}s",
+                    "final:", str(r.url)[:140])
+              hrefs = re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>', r.text)
+              print("anchors:", len(hrefs))
+              for h in hrefs[:6]:
+                  print("  href:", h[:220])
+              for h in hrefs:
+                  m = re.search(r"\.zip/(.+?)/?$", h, re.I) or re.search(r"[?&]file=([^&\"']+)", h)
+                  if m:
+                      members.append(unquote(m.group(1)))
+              print("members parsed:", len(members))
+              for m_ in members[:8]:
+                  print("  member:", m_)
+              # size cells
+              sizes = re.findall(r'id="size"[^>]*>([^<\n]+)', r.text)[:5]
+              print("size cells:", sizes)
+          step("Demos.zip listing", demos_listing)
 
-          def category():
-              cats = [h for h, t in links
-                      if "/downloads/" in h and "category" in h.lower()] or \
-                     [h for h, t in links if "/downloads/" in h]
-              if not cats:
-                  print("no category links found"); return
-              url = cats[0]
-              if url.startswith("/"):
-                  url = "https://www.tosecdev.org" + url
-              r = c.get(url)
-              print("category:", url[:120], "status:", r.status_code)
-              for href, txt in re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                                          r.text, re.S | re.I)[:400]:
-                  t = clean(txt)
-                  if t and ("download" in href.lower() or ".zip" in href.lower()):
-                      print(f"  {t!r:70} -> {href[:130]}")
-              # any mention of file sizes / descriptions
-              for m in re.findall(r"(?:Size|Filesize)[^<]{0,40}", r.text)[:10]:
-                  print("  size hint:", clean(m))
-          step("first category page", category)
+          def games_listing():
+              t0 = time.time()
+              r = c.get(f"https://archive.org/download/{IDENT}/Games.zip/")
+              print("status:", r.status_code, f"len={len(r.text)} in {time.time()-t0:.1f}s")
+              n = len(re.findall(r'<a\s', r.text))
+              print("anchors:", n)
+              for m_ in re.findall(r"\.zip/([^\"]+?)\"", r.text)[:5]:
+                  print("  member:", unquote(m_))
+          step("Games.zip listing (size/time check)", games_listing)
+
+          def member_fetch():
+              if not members:
+                  print("no members parsed"); return
+              mem = members[1] if len(members) > 1 else members[0]
+              server, dr = j.get("server"), j.get("dir")
+              # datanode view_archive URL (what the device would GET; no redirects)
+              nc = httpx.Client(timeout=120, follow_redirects=False, headers={"User-Agent": UA})
+              va = (f"https://{server}/view_archive.php?archive={quote(dr + '/Demos.zip', safe='/')}"
+                    f"&file={quote(mem, safe='')}&fn=/test.bin")
+              r = nc.get(va)
+              print("datanode member:", r.status_code,
+                    "content-length:", r.headers.get("content-length"),
+                    "transfer-encoding:", r.headers.get("transfer-encoding"),
+                    "location:", (r.headers.get("location") or "")[:120])
+              print("first bytes:", r.content[:8], "total:", len(r.content), "for", mem[:100])
+              # frontend variant (follow redirects) for comparison
+              r2 = c.get(f"https://archive.org/download/{IDENT}/Demos.zip/{quote(mem, safe='')}")
+              print("frontend member:", r2.status_code, "final:", str(r2.url)[:170])
+              print("  content-length:", r2.headers.get("content-length"),
+                    "te:", r2.headers.get("transfer-encoding"),
+                    "got:", len(r2.content), "first:", r2.content[:8])
+          step("member extraction", member_fetch)
           EOF
