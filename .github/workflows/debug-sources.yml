@@ -1,6 +1,5 @@
-# TEMPORARY diagnostic — can the September-2023 public ZX Spectrum TOSEC set
-# (one zip per section) serve per-member listings + downloads anonymously,
-# with Content-Length (the firmware rejects chunked)? Deleted after the probe.
+# TEMPORARY diagnostic — is TOSEC_S_to_Z-13.08.2023 (or any other public item)
+# a per-title-zip mirror of the 2023 ZX Spectrum TOSEC set? Deleted after use.
 name: Debug source fetch
 
 on:
@@ -16,16 +15,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install httpx
-      - name: Probe zx_spectrum_tosec_set_september_2023
+      - name: Probe 2023 candidates
         run: |
           python3 - <<'EOF'
-          import httpx, re, time, traceback
-          from urllib.parse import quote, unquote
+          import httpx, re, traceback
+          from collections import Counter
+          from urllib.parse import quote
 
           UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
           c = httpx.Client(timeout=300, follow_redirects=True, headers={"User-Agent": UA})
-          IDENT = "zx_spectrum_tosec_set_september_2023"
 
           def step(label, fn):
               print(f"\n===== {label} =====", flush=True)
@@ -34,66 +33,44 @@ jobs:
               except Exception:
                   traceback.print_exc()
 
-          j = {}
-          def meta():
-              global j
-              j = c.get(f"https://archive.org/metadata/{IDENT}").json()
-              print("server:", j.get("server"), "dir:", j.get("dir"),
-                    "workable:", j.get("workable_servers"))
-          step("metadata", meta)
+          def inspect(ident):
+              j = c.get(f"https://archive.org/metadata/{ident}").json()
+              md = j.get("metadata", {})
+              files = j.get("files", [])
+              print(f"{ident}: restricted={md.get('access-restricted-item')} "
+                    f"files={len(files)} server={j.get('server')} dir={j.get('dir')}")
+              top = Counter(f["name"].split("/")[0] for f in files)
+              print("  top-level (20):", dict(top.most_common(20)))
+              zx = [f for f in files if "ZX Spectrum" in f["name"]]
+              print("  paths containing 'ZX Spectrum':", len(zx))
+              for f in zx[:8]:
+                  print("   ", f["name"][:160], f.get("size"))
+              return j
 
-          members = []
-          def demos_listing():
-              t0 = time.time()
-              r = c.get(f"https://archive.org/download/{IDENT}/Demos.zip/")
-              print("status:", r.status_code, f"len={len(r.text)} in {time.time()-t0:.1f}s",
-                    "final:", str(r.url)[:140])
-              hrefs = re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>', r.text)
-              print("anchors:", len(hrefs))
-              for h in hrefs[:6]:
-                  print("  href:", h[:220])
-              for h in hrefs:
-                  m = re.search(r"\.zip/(.+?)/?$", h, re.I) or re.search(r"[?&]file=([^&\"']+)", h)
-                  if m:
-                      members.append(unquote(m.group(1)))
-              print("members parsed:", len(members))
-              for m_ in members[:8]:
-                  print("  member:", m_)
-              # size cells
-              sizes = re.findall(r'id="size"[^>]*>([^<\n]+)', r.text)[:5]
-              print("size cells:", sizes)
-          step("Demos.zip listing", demos_listing)
+          def s_to_z():
+              j = inspect("TOSEC_S_to_Z-13.08.2023")
+              files = j.get("files", [])
+              # census one more level under the Sinclair subtree, if present
+              sub = Counter("/".join(f["name"].split("/")[:2]) for f in files
+                            if f["name"].startswith("Sinclair"))
+              for k, v in sub.most_common(25):
+                  print("  ", k, v)
+              gz = [f for f in files if "/Games/" in f["name"] or "- Games -" in f["name"]]
+              print("  games-ish files:", len(gz))
+              for f in gz[:6]:
+                  print("   ", f["name"][:170], f.get("size"))
+          step("TOSEC_S_to_Z-13.08.2023", s_to_z)
 
-          def games_listing():
-              t0 = time.time()
-              r = c.get(f"https://archive.org/download/{IDENT}/Games.zip/")
-              print("status:", r.status_code, f"len={len(r.text)} in {time.time()-t0:.1f}s")
-              n = len(re.findall(r'<a\s', r.text))
-              print("anchors:", n)
-              for m_ in re.findall(r"\.zip/([^\"]+?)\"", r.text)[:5]:
-                  print("  member:", unquote(m_))
-          step("Games.zip listing (size/time check)", games_listing)
-
-          def member_fetch():
-              if not members:
-                  print("no members parsed"); return
-              mem = members[1] if len(members) > 1 else members[0]
-              server, dr = j.get("server"), j.get("dir")
-              # datanode view_archive URL (what the device would GET; no redirects)
-              nc = httpx.Client(timeout=120, follow_redirects=False, headers={"User-Agent": UA})
-              va = (f"https://{server}/view_archive.php?archive={quote(dr + '/Demos.zip', safe='/')}"
-                    f"&file={quote(mem, safe='')}&fn=/test.bin")
-              r = nc.get(va)
-              print("datanode member:", r.status_code,
-                    "content-length:", r.headers.get("content-length"),
-                    "transfer-encoding:", r.headers.get("transfer-encoding"),
-                    "location:", (r.headers.get("location") or "")[:120])
-              print("first bytes:", r.content[:8], "total:", len(r.content), "for", mem[:100])
-              # frontend variant (follow redirects) for comparison
-              r2 = c.get(f"https://archive.org/download/{IDENT}/Demos.zip/{quote(mem, safe='')}")
-              print("frontend member:", r2.status_code, "final:", str(r2.url)[:170])
-              print("  content-length:", r2.headers.get("content-length"),
-                    "te:", r2.headers.get("transfer-encoding"),
-                    "got:", len(r2.content), "first:", r2.content[:8])
-          step("member extraction", member_fetch)
+          def wider_search():
+              seen = set()
+              for q in ('sinclair AND tosec', 'title:("zx spectrum") AND tosec',
+                        '"tosec" AND "zx"'):
+                  r = c.get("https://archive.org/advancedsearch.php",
+                            params={"q": q, "fl[]": "identifier", "rows": "100",
+                                    "output": "json"})
+                  for d in r.json().get("response", {}).get("docs", []):
+                      seen.add(d["identifier"])
+              print(len(seen), "identifiers:")
+              print(sorted(seen))
+          step("wider search", wider_search)
           EOF
