@@ -1,0 +1,23 @@
+# TEMPORARY diagnostic — line counts of the deployed Pages catalog. Deleted after use.
+name: Debug source fetch
+
+on:
+  push:
+    branches: [claude/demos-games-archive-source-up5hva]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check deployed catalog
+        run: |
+          base=https://drewpo28.github.io/pico-spec-catalog
+          for p in sites.tsv tosec/_root.tsv tosec/Demos.tsv tosec/Games.tsv \
+                   tosec/Games~TAP~S.tsv tosec/Games~TRD~A.tsv tosec/Demos~TRD~A.tsv \
+                   tosec/Demos~TAP~0-9.tsv s4e/A.tsv s4e/RUS.tsv; do
+            echo "== $p"
+            code=$(curl -sS -o /tmp/f -w "%{http_code}" "$base/$p" || echo FAIL)
+            echo "   http=$code lines=$(wc -l < /tmp/f 2>/dev/null)"
+            head -3 /tmp/f | sed 's/^/   | /'
+          done
