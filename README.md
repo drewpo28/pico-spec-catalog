@@ -77,7 +77,7 @@ curl -OJ 'http://localhost:8080/v1/get?site=vtrd&path=A&name=<file>'
 ## Adapters (`app/adapters/`)
 
 Enable sources with `CATALOG_SITES` (comma/space list; code default `vtrd`, the
-Action builds `vtrd sc wos zxart s4e alf`). The order is the order shown in the device picker.
+Action builds `vtrd sc wos zxart s4e alf tosec`). The order is the order shown in the device picker.
 
 | id      | source                       | how |
 |---------|------------------------------|-----|
@@ -87,6 +87,7 @@ Action builds `vtrd sc wos zxart s4e alf`). The order is the order shown in the 
 | `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
 | `s4e`   | [spectrum4ever.org](https://spectrum4ever.org/) | Full Tape Crack Pack releases; HTML scrape, raw .TAP/.TZX via `download.php` (`&fn=/…` names the saved file) |
 | `alf`   | [zxbyte.org](http://zxbyte.org/) | ALF cartridge images (HTML scrape) |
+| `tosec` | [TOSEC on archive.org](https://archive.org/download/tosec-main/Sinclair/ZX%20Spectrum/) | ZX Spectrum Demos + Games TOSEC packs, re-cut as `<section>/<format>/<letter>` — zip contents listed via archive.org's zip view, single files streamed out of the packs from the datanode (`view_archive.php`) |
 
 Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
 `app/adapters/base.py`) and registering it in `app/adapters/__init__.py` — the
@@ -154,6 +155,7 @@ python3 gen_static.py --out _site --site vtrd --max-files 400 --max-depth 2
 python3 gen_static.py --out _site --site sc
 python3 gen_static.py --out _site --site wos
 python3 gen_static.py --out _site --site zxart
+python3 gen_static.py --out _site --site tosec
 # _site/ is the Pages root; sites.tsv + per-site trees live there.
 ```
 

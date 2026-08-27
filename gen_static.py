@@ -65,6 +65,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "s4e":
         from app.adapters.s4e import S4eAdapter        # lazy (needs httpx)
         return S4eAdapter()
+    if site == "tosec":
+        from app.adapters.tosec import TosecAdapter    # lazy (needs httpx)
+        return TosecAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 
