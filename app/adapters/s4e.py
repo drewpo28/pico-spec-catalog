@@ -2,22 +2,23 @@
 
 spectrum4ever.org lists ~6100 tape releases (cracked/translated versions with
 per-release cracker credits) on one page per letter — no pagination, no API, no
-UA filtering. Rows are rigid markup, parsed with regexes (2026-07 redesign:
-divs instead of table rows, semantic release__* classes, the blue T_B_ flags
-column dropped, a grn "release__special" span with verbose Cyrillic loader
-details added — not shown, too long for the 36-col OSD):
+UA filtering. Rows are rigid markup, parsed with regexes (2026-08 redesign:
+one <article class="release …"> per row, inline-SVG icons replacing the old
+js/tape.png imgs — verified against the live markup 2026-08-27; the release__*
+field classes survived the redesign unchanged):
 
-    <img class="icon" src="js/tape.png">
-    <a ... href='download.php?t=fulltape&id=N'>TITLE</a>
-    <span class="release__format cian">.TAP</span>
-    <a ... by=cracker">CRACKER</a>
-    <span class="release__comment red">NOTE</span>
-    <span class="release__special grn">(loader details)</span>
-    <span class="release__lang magn">LANG</span>
-    <span class="release__actions">…play/download buttons…</span>
+    <article class="release release--with-scr">
+      <a class="release__title yel" href='download.php?t=fulltape&id=N'>TITLE</a>
+      <span class="release__format cian">.TAP</span>
+      <a class="release__author grey" href="…by=cracker">CRACKER</a>
+      <span class="release__comment red">NOTE</span>
+      <span class="release__special grn">(loader details)</span>
+      <span class="release__lang magn">LANG</span>
+      <span class="release__actions">…play/emulator buttons…</span>
+    </article>
 
-A row = the chunk between consecutive tape.png imgs, cut at release__actions
-(the player area has its own cian/magn spans that must not leak into fields).
+A row = one <article class="release …"> chunk, cut at release__actions (the
+player area has its own attrs/spans that must not leak into fields).
 
 Display name = "TITLE .TAP  CRACKER  NOTE  LANG" (empty fields omitted) —
 e.g. "A TEAM .TAP  ANDREW STRIKES CODE  SPN".
@@ -60,7 +61,7 @@ LETTERS: "list[tuple[str, str]]" = (
     + [("RUS", "А-Я")]
 )
 
-_ROW_SPLIT = re.compile(r'<img[^>]*src="js/tape\.png"[^>]*>')
+_ROW_SPLIT = re.compile(r'<article[^>]*class="[^"]*\brelease\b[^"]*"[^>]*>')
 _ROW_ID = re.compile(r"download\.php\?t=fulltape&id=(\d+)'>([^<]*)</a>")
 _ROW_EXT = re.compile(r'class="release__format[^"]*">([^<]*)</span>')
 _ROW_CRK = re.compile(r'by=cracker">([^<]*)</a>')
