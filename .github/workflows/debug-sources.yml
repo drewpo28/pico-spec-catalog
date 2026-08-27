@@ -1,5 +1,5 @@
-# TEMPORARY diagnostic — is TOSEC_S_to_Z-13.08.2023 (or any other public item)
-# a per-title-zip mirror of the 2023 ZX Spectrum TOSEC set? Deleted after use.
+# TEMPORARY diagnostic — inspect wildcard items for a fresh per-file ZX set.
+# Deleted after use.
 name: Debug source fetch
 
 on:
@@ -15,62 +15,38 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install httpx
-      - name: Probe 2023 candidates
+      - name: Inspect wildcard items
         run: |
           python3 - <<'EOF'
-          import httpx, re, traceback
+          import httpx, traceback
           from collections import Counter
-          from urllib.parse import quote
 
           UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
           c = httpx.Client(timeout=300, follow_redirects=True, headers={"User-Agent": UA})
 
-          def step(label, fn):
-              print(f"\n===== {label} =====", flush=True)
+          def inspect(ident):
+              print(f"\n===== {ident} =====", flush=True)
               try:
-                  fn()
+                  j = c.get(f"https://archive.org/metadata/{ident}").json()
+                  md = j.get("metadata", {})
+                  files = j.get("files", [])
+                  print("restricted:", md.get("access-restricted-item"),
+                        "files:", len(files), "item_size:", j.get("item_size"),
+                        "title:", (md.get("title") or "")[:100])
+                  top = Counter(f["name"].split("/")[0] for f in files)
+                  print("top-level (15):", dict(top.most_common(15)))
+                  exts = Counter(f["name"].rsplit(".", 1)[-1].lower() for f in files)
+                  print("extensions (10):", dict(exts.most_common(10)))
+                  zx = [f["name"] for f in files
+                        if any(k in f["name"].lower() for k in ("spectrum", "sinclair", "zx"))]
+                  print("zx-ish paths:", len(zx))
+                  for n in zx[:10]:
+                      print("   ", n[:170])
               except Exception:
                   traceback.print_exc()
 
-          def inspect(ident):
-              j = c.get(f"https://archive.org/metadata/{ident}").json()
-              md = j.get("metadata", {})
-              files = j.get("files", [])
-              print(f"{ident}: restricted={md.get('access-restricted-item')} "
-                    f"files={len(files)} server={j.get('server')} dir={j.get('dir')}")
-              top = Counter(f["name"].split("/")[0] for f in files)
-              print("  top-level (20):", dict(top.most_common(20)))
-              zx = [f for f in files if "ZX Spectrum" in f["name"]]
-              print("  paths containing 'ZX Spectrum':", len(zx))
-              for f in zx[:8]:
-                  print("   ", f["name"][:160], f.get("size"))
-              return j
-
-          def s_to_z():
-              j = inspect("TOSEC_S_to_Z-13.08.2023")
-              files = j.get("files", [])
-              # census one more level under the Sinclair subtree, if present
-              sub = Counter("/".join(f["name"].split("/")[:2]) for f in files
-                            if f["name"].startswith("Sinclair"))
-              for k, v in sub.most_common(25):
-                  print("  ", k, v)
-              gz = [f for f in files if "/Games/" in f["name"] or "- Games -" in f["name"]]
-              print("  games-ish files:", len(gz))
-              for f in gz[:6]:
-                  print("   ", f["name"][:170], f.get("size"))
-          step("TOSEC_S_to_Z-13.08.2023", s_to_z)
-
-          def wider_search():
-              seen = set()
-              for q in ('sinclair AND tosec', 'title:("zx spectrum") AND tosec',
-                        '"tosec" AND "zx"'):
-                  r = c.get("https://archive.org/advancedsearch.php",
-                            params={"q": q, "fl[]": "identifier", "rows": "100",
-                                    "output": "json"})
-                  for d in r.json().get("response", {}).get("docs", []):
-                      seen.add(d["identifier"])
-              print(len(seen), "identifiers:")
-              print(sorted(seen))
-          step("wider search", wider_search)
+          for ident in ("hearto-1g1r-collection", "the-spectrum_202412",
+                        "games_20260723_1453", "tosec"):
+              inspect(ident)
           EOF
