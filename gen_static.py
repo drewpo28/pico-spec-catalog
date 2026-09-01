@@ -68,6 +68,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "tosec":
         from app.adapters.tosec import TosecAdapter    # lazy (needs httpx)
         return TosecAdapter()
+    if site == "vgm":
+        from app.adapters.vgm import VgmAdapter        # lazy (needs httpx)
+        return VgmAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 

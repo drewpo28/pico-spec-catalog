@@ -35,6 +35,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "tosec":
             from .tosec import TosecAdapter  # lazy (httpx) — TOSEC packs on archive.org
             reg["tosec"] = TosecAdapter()
+        elif sid == "vgm":
+            from .vgm import VgmAdapter      # lazy (httpx) — vgmrips.net VGM packs
+            reg["vgm"] = VgmAdapter()
     return reg
 
 

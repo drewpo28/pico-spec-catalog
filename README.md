@@ -77,7 +77,7 @@ curl -OJ 'http://localhost:8080/v1/get?site=vtrd&path=A&name=<file>'
 ## Adapters (`app/adapters/`)
 
 Enable sources with `CATALOG_SITES` (comma/space list; code default `vtrd`, the
-Action builds `vtrd sc wos zxart s4e alf tosec`). The order is the order shown in the device picker.
+Action builds `vtrd sc wos zxart s4e alf tosec vgm`). The order is the order shown in the device picker.
 
 | id      | source                       | how |
 |---------|------------------------------|-----|
@@ -88,6 +88,7 @@ Action builds `vtrd sc wos zxart s4e alf tosec`). The order is the order shown i
 | `s4e`   | [spectrum4ever.org](https://spectrum4ever.org/) | Full Tape Crack Pack releases; HTML scrape, raw .TAP/.TZX via `download.php` (`&fn=/…` names the saved file) |
 | `alf`   | [zxbyte.org](http://zxbyte.org/) | ALF cartridge images (HTML scrape) |
 | `tosec` | [ZX Spectrum TOSEC set on archive.org](https://archive.org/details/zx_spectrum_tosec_set_september_2023) | Demos + Games as `<section>/<format>/<letter>` from the public September-2023 set (≈TOSEC v2023-06-10; the canonical `tosec-main` item is login-gated). Listings come from archive.org's zip view of `Demos.zip`/`Games.zip`; the device streams single raw `.tap`/`.trd`/… members out of the packs from the datanode (`view_archive.php`, chunked → needs a firmware with the 2026-07 HttpsGet chunked support) |
+| `vgm`   | [vgmrips.net](https://vgmrips.net/) | VGM music packs for the chips pico-spec can drive (`2xSAA1099`, `2xSN76489`, `SAA1099`, `SN76489`, `YM2413`, `YM3812`, `YMF262`), as `<chip>/<pack>/<track>.vgm`. HTML scrape of the per-chip pack listings ([packs/chips](https://vgmrips.net/packs/chips)); pack contents are listed straight from the pack `.zip`'s central directory via HTTP Range (no full download for listings). Tracks are stored upstream as `.vgz` (gzipped `.vgm`) — the device has no gunzip, so entries carry no direct link: the exporter/server extracts the member and **gunzips it to a ready `.vgm`** at build/request time |
 
 Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
 `app/adapters/base.py`) and registering it in `app/adapters/__init__.py` — the
@@ -156,6 +157,7 @@ python3 gen_static.py --out _site --site sc
 python3 gen_static.py --out _site --site wos
 python3 gen_static.py --out _site --site zxart
 python3 gen_static.py --out _site --site tosec
+python3 gen_static.py --out _site --site vgm
 # _site/ is the Pages root; sites.tsv + per-site trees live there.
 ```
 
@@ -169,7 +171,7 @@ This repo **is** the dedicated catalog, so deployment is just enabling Pages:
 1. Push this repo to GitHub (`drewpo28/pico-spec-catalog`).
 2. **Settings → Pages → Source: GitHub Actions**.
 3. **Actions → Build catalog (Pages) → Run workflow** (or wait for the daily cron
-   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart s4e alf"`, `MAX_FILES=400`,
+   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart s4e alf tosec vgm"`, `MAX_FILES=400`,
    `MAX_DEPTH=4` by default) and deploys `_site/` to Pages.
 4. The catalog is then live at `https://drewpo28.github.io/pico-spec-catalog/` — which
    is the device's built-in default (`catalog_host` empty).
