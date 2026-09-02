@@ -96,6 +96,13 @@ CHIPS: "list[tuple[str, list[str]]]" = [
 _PACK_A = re.compile(
     r'''href=["'](?:https?://(?:www\.)?vgmrips\.net)?/packs/pack/([^"'/?#]+)/?["'][^>]*>(.*?)</a>''',
     re.I | re.S)
+# One listing row = the pack anchors (cover, title, #autoplay twin — all carry
+# the same slug) followed by that pack's tag links; the /packs/system/ anchors
+# between one pack's anchors and the next pack's therefore belong to the
+# former. Scanned in document order with this combined token regex.
+_ROW_TOKEN = re.compile(
+    r'''href=["'](?:https?://(?:www\.)?vgmrips\.net)?/packs/(pack|system)/([^"'?#]+?)/?["'][^>]*>(.*?)</a>''',
+    re.I | re.S)
 _PAGE_P = re.compile(r'''href=["'][^"']*\?(?:[^"']*&(?:amp;)?)?p=(\d+)[^"']*["']''', re.I)
 _TRACK_A = re.compile(
     r'''href=["']((?:https?://(?:www\.)?vgmrips\.net)?/packs/vgm/[^"']+\.(?:vgz|vgm))["']''',
@@ -167,8 +174,9 @@ class VgmAdapter(Adapter):
         raise last
 
     # ── packs of a chip (paginated listing scrape) ───────────────────────────
-    def _crawl_slug(self, slug: str, order: "dict[str, str]") -> None:
-        """Merge {pack slug: title} from every listing page of one chip slug."""
+    def _crawl_slug(self, slug: str, order: "dict[str, list]") -> None:
+        """Merge {pack slug: [title, [systems]]} from every listing page of one
+        chip slug — the systems become the "(CPC+, GX4000)" name suffix."""
         p, max_p = 1, 1
         while p <= min(max_p, MAX_PAGES):
             # The FIRST page must be requested WITHOUT the p param: single-page
@@ -176,11 +184,9 @@ class VgmAdapter(Adapter):
             # empty listing (probed live 2026-09-02) — that's what silently
             # zeroed SAA1099 and shrank the alias unions. ?p=N works from p=2.
             params = {"p": p} if p > 1 else None
-            matches: "list[re.Match[str]]" = []
             for attempt in range(2):
                 r = self._get(f"{BASE}/packs/chip/{slug}", params=params)
-                matches = list(_PACK_A.finditer(r.text))
-                if matches:
+                if _PACK_A.search(r.text):
                     break
                 # A 200 with zero pack anchors mid-listing is a served glitch
                 # (an anti-bot page slipping through, a hiccup) — retry once.
@@ -188,12 +194,18 @@ class VgmAdapter(Adapter):
                 # dropped the tail pages of SN76489 (packs "disappeared").
                 if attempt == 0:
                     print(f"  vgm: {slug} p{p}: no pack anchors, retrying")
-            for m in matches:
-                s, t = m.group(1), _text(m.group(2))
-                if s not in order:
-                    order[s] = t
-                elif t and not order[s]:     # cover-image/#autoplay twin first
-                    order[s] = t
+            cur = None
+            for m in _ROW_TOKEN.finditer(r.text):
+                kind, s, body = m.group(1).lower(), m.group(2), _text(m.group(3))
+                if kind == "pack":
+                    if "/" in s:
+                        continue             # pack slugs are single-segment
+                    rec = order.setdefault(s, ["", []])
+                    if body and not rec[0]:  # cover/#autoplay twins are untitled
+                        rec[0] = body
+                    cur = s
+                elif cur is not None and body and body not in order[cur][1]:
+                    order[cur][1].append(body)   # system tag of the current row
             for pm in _PAGE_P.finditer(r.text):
                 max_p = max(max_p, int(pm.group(1)))
             p += 1                           # walk EVERY page up to max_p —
@@ -203,7 +215,7 @@ class VgmAdapter(Adapter):
         hit = self._packs.get(chip)
         if hit and hit[0] > time.time():
             return hit[1]
-        order: dict[str, str] = {}
+        order: dict[str, list] = {}
         for slug in next((c for d, c in CHIPS if d == chip), []):
             try:
                 self._crawl_slug(slug, order)
@@ -211,9 +223,14 @@ class VgmAdapter(Adapter):
                 print(f"  vgm {chip}: chip page ({slug}) failed: {e}")
         out: list[tuple[str, str]] = []
         seen: set[str] = set()
-        for s, t in order.items():
-            # '/' is the path separator on the wire; keep titles single-segment.
-            name = _WS.sub(" ", (t or s).replace("/", "-")).strip()[:80] or s
+        for s, (t, systems) in order.items():
+            # '/' is the path separator on the wire; keep names single-segment.
+            name = _WS.sub(" ", (t or s).replace("/", "-")).strip() or s
+            if systems:                      # "Burnin' Rubber (CPC+, GX4000)"
+                sfx = " (" + ", ".join(x.replace("/", "-") for x in systems[:4]) + ")"
+                name = name[:max(8, 96 - len(sfx))] + sfx
+            else:
+                name = name[:96]
             if name in seen:
                 i = 2
                 while f"{name} {i}" in seen:
