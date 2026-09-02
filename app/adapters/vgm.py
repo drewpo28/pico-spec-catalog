@@ -167,21 +167,29 @@ class VgmAdapter(Adapter):
             # chip listings (saa1099, the card-alias slugs) answer ?p=1 with an
             # empty listing (probed live 2026-09-02) — that's what silently
             # zeroed SAA1099 and shrank the alias unions. ?p=N works from p=2.
-            r = self._get(f"{BASE}/packs/chip/{slug}",
-                          params={"p": p} if p > 1 else None)
-            new = 0
-            for m in _PACK_A.finditer(r.text):
+            params = {"p": p} if p > 1 else None
+            matches: "list[re.Match[str]]" = []
+            for attempt in range(2):
+                r = self._get(f"{BASE}/packs/chip/{slug}", params=params)
+                matches = list(_PACK_A.finditer(r.text))
+                if matches:
+                    break
+                # A 200 with zero pack anchors mid-listing is a served glitch
+                # (an anti-bot page slipping through, a hiccup) — retry once.
+                # Never treated as end-of-list: bailing out here once silently
+                # dropped the tail pages of SN76489 (packs "disappeared").
+                if attempt == 0:
+                    print(f"  vgm: {slug} p{p}: no pack anchors, retrying")
+            for m in matches:
                 s, t = m.group(1), _text(m.group(2))
                 if s not in order:
                     order[s] = t
-                    new += 1
                 elif t and not order[s]:     # cover-image/#autoplay twin first
                     order[s] = t
             for pm in _PAGE_P.finditer(r.text):
                 max_p = max(max_p, int(pm.group(1)))
-            if new == 0:                     # page repeated / ran past the end
-                break
-            p += 1
+            p += 1                           # walk EVERY page up to max_p —
+                                             # duplicates just merge into order
 
     def _chip_packs(self, chip: str) -> "list[tuple[str, str]]":
         hit = self._packs.get(chip)
@@ -207,6 +215,7 @@ class VgmAdapter(Adapter):
             out.append((name, s))
             if self._max_packs and len(out) >= self._max_packs:
                 break
+        out.sort(key=lambda t: t[0].casefold())  # site order is by-date — sort A-Z
         print(f"  vgm {chip}: {len(out)} packs")
         self._packs[chip] = (time.time() + CACHE_TTL, out)
         return out
