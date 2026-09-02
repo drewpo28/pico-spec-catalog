@@ -204,7 +204,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Static catalog exporter for GitHub Pages")
     ap.add_argument("--out", required=True, help="output root (the Pages site dir)")
     ap.add_argument("--site", action="append", default=[],
-                    help="site id to export (repeatable). Default: vtrd")
+                    help="site id to export (repeatable). Default: vtrd. "
+                         "'id=N' overrides --max-files for that site alone "
+                         "(e.g. 'vgm=1800' — mirror-heavy sources get their own "
+                         "budget without inflating everyone else's)")
     ap.add_argument("--mirror", dest="mirror", action="store_true", default=True,
                     help="mirror file bytes into the tree (default)")
     ap.add_argument("--no-mirror", dest="mirror", action="store_false",
@@ -222,11 +225,13 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
 
     manifest = []
-    for sid in sites:
-        print(f"== exporting {sid} ==")
+    for spec in sites:
+        sid, _, mf = spec.partition("=")          # 'vgm=1800' → per-site budget
+        max_files = int(mf) if mf else args.max_files
+        print(f"== exporting {sid} (max-files {max_files}) ==")
         a = build_adapter(sid)
         export(a, args.out, mirror=args.mirror, link=args.link,
-               max_files=args.max_files, max_depth=args.max_depth)
+               max_files=max_files, max_depth=args.max_depth)
         manifest.append(f"{a.id}\t{clean(a.name)}")
 
     with open(os.path.join(args.out, "sites.tsv"), "w", encoding="utf-8") as fh:
