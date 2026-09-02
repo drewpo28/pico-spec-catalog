@@ -23,7 +23,7 @@ on:
     inputs:
       sites:
         description: "Space-separated site ids to export"
-        default: "vtrd sc wos zxart s4e alf tosec vgm=1800"
+        default: "vtrd sc wos zxart s4e alf tosec vgm"
       max_files:
         description: "Cap mirrored files per run (0 = unlimited)"
         default: "400"
@@ -52,14 +52,9 @@ jobs:
         run: pip install -r requirements.txt
       - name: Export static catalog
         env:
-          SITES: ${{ github.event.inputs.sites || 'vtrd sc wos zxart s4e alf tosec vgm=1800' }}
+          SITES: ${{ github.event.inputs.sites || 'vtrd sc wos zxart s4e alf tosec vgm' }}
           MAX_FILES: ${{ github.event.inputs.max_files || '400' }}
           MAX_DEPTH: ${{ github.event.inputs.max_depth || '4' }}
-          # vgm mirrors EVERYTHING it lists (no direct links: .vgz needs a
-          # gunzip the device doesn't have), so the tree must fit the mirror
-          # budget: 25 packs/chip ≈ 1500 tracks ≈ the vgm=1800 budget above.
-          # Everything the device sees is downloadable — no dead entries.
-          VGM_MAX_PACKS: "25"
         run: |
           args=""
           for s in $SITES; do args="$args --site $s"; done

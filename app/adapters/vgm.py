@@ -36,15 +36,18 @@ Everything below was verified against the live site via the probe workflow
     retried with a growing backoff. The direct .vgz GET stays as the
     fallback when a pack has no zip or a member is missing from it.
 
-Tracks are stored upstream as .vgz — a plain GZIP-compressed .vgm. The
-device's unzipper speaks ZIP, not gzip (and its browser-less HTTP stack never
-solves Anubis anyway), so track entries carry NO direct url on purpose:
-gen_static then falls into mirror mode, fetch() extracts + gunzips, and the
-Pages tree serves a ready-to-play .vgm the device just GETs. The dynamic /v1
-server does the same per request. Plain .vgm members pass through unchanged.
-The whole pack zip lives in a single-slot cache: the exporter mirrors a
-directory's files right after listing it, so one download serves every track
-of the pack.
+Tracks are stored upstream as .vgz — a plain GZIP-compressed .vgm. Entries
+carry the DIRECT .vgz URL (link mode): the Pages tree stays tiny (listings
+only, no mirror budget — the full per-chip catalog fits) and the device
+downloads the track itself, then unwraps the gzip on the SD. That needs the
+matching pico-speccy firmware (branch claude/vgz-catalog-support): a
+non-Mozilla UA towards vgmrips.net and the post-download .vgz→.vgm gunzip.
+The locator ends with a dummy ?fn=/<ascii>.vgz — vgmrips serves the file
+byte-identically with the query (verified live), and the device names the
+saved file after the locator's last path segment (the s4e/tosec trick).
+fetch() (the dynamic /v1 server, and gen_static --no-link mirroring) still
+gunzips server-side, pulling bulk bytes from the whole-pack zip in a
+single-slot cache.
 
 Knobs: VGM_MAX_PACKS (env) caps packs kept per chip, 0/unset = all;
 VGM_REQ_GAP (env) is the minimum seconds between requests (default 0.5).
@@ -101,14 +104,14 @@ def _text(markup: str) -> str:
     return _WS.sub(" ", _html.unescape(_TAGS.sub(" ", markup))).strip()
 
 
-def _fn_slug(stem: str) -> str:
-    """ASCII download filename — written verbatim into the Pages tree and the
-    locator URL, and the device sends locators unencoded (same contract as
-    s4e/tosec)."""
+def _fn_slug(stem: str, ext: str = ".vgm") -> str:
+    """ASCII download filename — written verbatim into the locator URL, and the
+    device sends locators unencoded and names the saved file after the last
+    path segment (same contract as s4e/tosec)."""
     t = _FN_SAFE.sub("_", stem).strip("_")
     if not any(c.isascii() and c.isalnum() for c in t):
         t = "vgm"
-    return t[:80] + ".vgm"
+    return t[:80] + ext
 
 
 class VgmAdapter(Adapter):
@@ -268,12 +271,13 @@ class VgmAdapter(Adapter):
                 slug = self._pack_slug(seg[0], seg[1])
             except FileNotFoundError:
                 return []
-            # No url on purpose: .vgz needs a gunzip the device doesn't have
-            # (and Anubis gates its browser-less HTTP stack anyway), so the
-            # exporter mirrors fetch()'s ready .vgm bytes instead. Size is
-            # unknown until the gunzip — the exporter fills in exact sizes
-            # for everything it mirrors.
-            return [Entry(False, n, 0) for n, _ in self._pack_info(slug)[0]]
+            # Direct .vgz link per track. The ?fn=/ tail names the saved file
+            # (ASCII, ends .vgz so the firmware's post-download gunzip
+            # triggers); vgmrips ignores the query on these URLs. Size stays 0
+            # — the device reads Content-Length at download time.
+            return [Entry(False, n, 0, url=u + "?fn=/" + _fn_slug(
+                        unquote(u.rsplit("/", 1)[-1]).rsplit(".", 1)[0], ".vgz"))
+                    for n, u in self._pack_info(slug)[0]]
         return []
 
     def fetch(self, path: str, name: str) -> tuple[bytes, str]:
