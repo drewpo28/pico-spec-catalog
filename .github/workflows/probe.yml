@@ -1,0 +1,25 @@
+# TEMPORARY: locate the RoboCop (Data East) pack's chip slugs + size AY/YM2203
+# (round 7, see probe_vgm.py). Standalone — does not touch the Pages build.
+# Delete with probe_vgm.py.
+
+name: Probe vgmrips markup
+
+on:
+  push:
+    branches: [main]
+    paths: [probe_vgm.py, .github/workflows/probe.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install httpx==0.28.1
+      - run: python3 probe_vgm.py
