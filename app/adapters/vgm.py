@@ -163,7 +163,12 @@ class VgmAdapter(Adapter):
         """Merge {pack slug: title} from every listing page of one chip slug."""
         p, max_p = 1, 1
         while p <= min(max_p, MAX_PAGES):
-            r = self._get(f"{BASE}/packs/chip/{slug}", params={"p": p})
+            # The FIRST page must be requested WITHOUT the p param: single-page
+            # chip listings (saa1099, the card-alias slugs) answer ?p=1 with an
+            # empty listing (probed live 2026-09-02) — that's what silently
+            # zeroed SAA1099 and shrank the alias unions. ?p=N works from p=2.
+            r = self._get(f"{BASE}/packs/chip/{slug}",
+                          params={"p": p} if p > 1 else None)
             new = 0
             for m in _PACK_A.finditer(r.text):
                 s, t = m.group(1), _text(m.group(2))
