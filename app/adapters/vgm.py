@@ -6,12 +6,18 @@ only about the chips it can play, so the tree exposed to the device is:
 
     <chip> / <pack title> / <track>.vgm
 
-with the chip level fixed to SAA1099, SN76489, YM2413, YM3812, YMF262.
+with the chip level fixed to the chips the DivMMC VGM-player card drives:
+AY-3-8910, SAA1099, SN76489, YM2203, YM2413, YM3812, YMF262.
 The site has no separate "2x…" categories (probed live 2026-09-02:
 /packs/chip/2xsn76489 is 404 — "2xSN76489" is a per-pack label), so dual-chip
 rips simply appear inside their base chip's category. Some chip tags are the
 same die on a branded card ("AD-Lib (YM3812)", "Sound Blaster 16 (YMF262)",
-"OPLL (YM2413)") — those alias slugs are unioned into the base chip's dir.
+"OPLL (YM2413)", the PC-9801-26K YM2203 boards) or a register-compatible
+clone (YM2149 ~ AY-3-8910) — those alias slugs are unioned into the base
+chip's dir. NOTE (probed live): a chip listing shows a pack only under its
+FIRST chip — RoboCop (YM2203+YM3812) is on /packs/chip/ym2203 page 1 and
+nowhere in ym3812's 12 pages — so covering the full supported-chip set is
+what makes multi-chip packs findable at all.
 
 Everything below was verified against the live site via the probe workflow
 (GitHub runners; this dev sandbox cannot reach vgmrips.net):
@@ -77,8 +83,10 @@ TRIES = 3                     # attempts per request (timeouts / 429 / 5xx)
 # device dir name -> chip slugs on the site whose packs it unions
 # (base tag + same-die card aliases, from the live /packs/chips list).
 CHIPS: "list[tuple[str, list[str]]]" = [
+    ("AY-3-8910", ["ay-3-8910", "ym2149"]),
     ("SAA1099", ["saa1099"]),
     ("SN76489", ["sn76489"]),
+    ("YM2203",  ["ym2203", "pc-9801-26k-ym2203", "ym2203-pc-9801-26k"]),
     ("YM2413",  ["ym2413", "opll-ym2413"]),
     ("YM3812",  ["ym3812", "ad-lib-ym3812", "adlib-soundblaster-ym3812",
                  "sound-blaster-1-0-ym3812", "sound-blaster-pro-ym3812"]),
