@@ -82,6 +82,15 @@ WORKERS = int(os.environ.get("SP3_WORKERS", "3"))
 REQ_GAP = float(os.environ.get("SP3_REQ_GAP", "0.2"))     # seconds between requests
 CHALLENGE_WAIT = float(os.environ.get("SP3_CHALLENGE_WAIT", "60"))  # 1st backoff, doubles
 RETRIES = 4
+
+
+class Blocked(BaseException):
+    """The CDN is challenging us and backing off did not help.
+
+    Deliberately NOT an Exception: gen_static's per-directory handler swallows
+    Exceptions and writes an empty listing, which for a mid-crawl block would
+    publish a truncated catalog (a few letters full, the rest empty). This
+    aborts the whole export instead, so the previous Pages deploy stays live."""
 YEARS = range(1992, 2026)
 LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
@@ -241,7 +250,11 @@ class Sp3Adapter(Adapter):
             try:
                 r = self._client.get(url)
                 if r.status_code == 403 and b"jschallenge" in r.content:
-                    last = RuntimeError("CDN bot challenge (403)")
+                    if attempt == RETRIES - 1:
+                        raise Blocked(
+                            f"spectrum3.es: CDN bot challenge persists after "
+                            f"{RETRIES} backoffs — the crawler's IP is rate-limited. "
+                            f"Retry later and/or lower SP3_WORKERS / raise SP3_REQ_GAP.")
                     print(f"  sp3: challenged, backing off {wait:.0f}s "
                           f"(slow down with SP3_WORKERS / SP3_REQ_GAP)")
                     time.sleep(wait)
@@ -284,7 +297,7 @@ class Sp3Adapter(Adapter):
         """(title, author, langs, dsk_url) per conversion row of one game."""
         try:
             html = _decode(self._get(g.page))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — a 404 is a dead upstream card
             print(f"  sp3: skip {g.page}: {e}")
             return []
         m = _H1.search(html)
