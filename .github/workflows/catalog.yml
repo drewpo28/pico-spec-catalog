@@ -56,9 +56,10 @@ jobs:
           MAX_FILES: ${{ github.event.inputs.max_files || '400' }}
           MAX_DEPTH: ${{ github.event.inputs.max_depth || '4' }}
           # spectrum3.es sits behind a rate-limiting CDN that answers a too-eager
-          # crawler with a JS bot challenge — pace the ~3300 detail-page fetches.
+          # crawler with a JS bot challenge — pace the ~3360 page fetches at one
+          # per second (~1 h). The nightly cron has the time; a block does not.
           SP3_WORKERS: "3"
-          SP3_REQ_GAP: "0.2"
+          SP3_REQ_GAP: "1.0"
         run: |
           args=""
           for s in $SITES; do args="$args --site $s"; done

@@ -74,12 +74,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 CACHE_TTL = 3600
 # The Hostinger CDN in front of spectrum3.es rate-limits by IP and answers with a
 # JS "Checking your browser" challenge (HTTP 403, /hcdn-cgi/jschallenge) once a
-# client is too eager — 8 parallel workers over the ~3300 detail pages trips it.
-# The crawl is therefore paced (a global gap between requests) and backs off hard
-# when a challenge does appear, so the whole site is walked without ever being
-# challenged. Tunable for the CI runner via the environment.
+# client is too eager — 8 parallel workers over the ~3300 detail pages trips it,
+# and the block then outlasts any backoff. The crawl is therefore deliberately
+# slow: ONE request per second across all workers, so the ~3360 pages take about
+# an hour. Nothing waits on it (a nightly cron publishes the tree), so the polite
+# rate costs nothing and keeps us welcome. Tunable via the environment.
 WORKERS = int(os.environ.get("SP3_WORKERS", "3"))
-REQ_GAP = float(os.environ.get("SP3_REQ_GAP", "0.2"))     # seconds between requests
+REQ_GAP = float(os.environ.get("SP3_REQ_GAP", "1.0"))     # seconds between requests
 CHALLENGE_WAIT = float(os.environ.get("SP3_CHALLENGE_WAIT", "60"))  # 1st backoff, doubles
 RETRIES = 4
 
