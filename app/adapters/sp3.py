@@ -33,7 +33,7 @@ builds of the same game apart; remaining exact duplicates are numbered.
 
 Files are plain static .dsk (Content-Type text/plain, no zip) served by the
 Hostinger CDN, so they are exposed as direct links (link mode, nothing
-mirrored). The device names the saved file after the locator's last path
+mirrored — the ~5560 disks are ~1 GB, far past the Pages budget). The device names the saved file after the locator's last path
 segment and does not percent-decode it, so — as for s4e — the URL gets a dummy
 query whose value starts with '/' and ends with an ASCII filename; static
 hosting ignores the query (verified byte-identical):
@@ -55,6 +55,7 @@ from __future__ import annotations
 import os
 import posixpath
 import re
+import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
@@ -70,7 +71,16 @@ BASE = "https://spectrum3.es/"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 CACHE_TTL = 3600
-WORKERS = 8            # parallel detail-page fetches (static CDN, ~90 s for the whole site)
+# The Hostinger CDN in front of spectrum3.es rate-limits by IP and answers with a
+# JS "Checking your browser" challenge (HTTP 403, /hcdn-cgi/jschallenge) once a
+# client is too eager — 8 parallel workers over the ~3300 detail pages trips it.
+# The crawl is therefore paced (a global gap between requests) and backs off hard
+# when a challenge does appear, so the whole site is walked without ever being
+# challenged. Tunable for the CI runner via the environment.
+WORKERS = int(os.environ.get("SP3_WORKERS", "3"))
+REQ_GAP = float(os.environ.get("SP3_REQ_GAP", "0.2"))     # seconds between requests
+CHALLENGE_WAIT = float(os.environ.get("SP3_CHALLENGE_WAIT", "60"))  # 1st backoff, doubles
+RETRIES = 4
 YEARS = range(1992, 2026)
 LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
@@ -147,22 +157,42 @@ class Sp3Adapter(Adapter):
                 "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
             },
         )
+        self._lock = threading.Lock()
+        self._next_req = 0.0
         self._games: tuple[float, list[_Game]] | None = None
         self._cache: dict[str, tuple[float, list[Entry]]] = {}
 
     # ── HTTP ─────────────────────────────────────────────────────────────────
+    def _pace(self) -> None:
+        """One global request every REQ_GAP seconds, across all workers."""
+        with self._lock:
+            wait = self._next_req - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._next_req = time.monotonic() + REQ_GAP
+
     def _get(self, rel: str) -> bytes:
-        """GET a site-relative, percent-DECODED path (retried: the CDN
-        occasionally drops a connection under parallel load)."""
+        """GET a site-relative, percent-DECODED path. Paced, retried, and
+        challenge-aware: a WAF challenge is not a permanent failure, so back off
+        and try again rather than exporting a half-empty catalog."""
         url = BASE + quote(rel)
         last: Exception | None = None
-        for attempt in range(3):
+        wait = CHALLENGE_WAIT
+        for attempt in range(RETRIES):
+            self._pace()
             try:
                 r = self._client.get(url)
+                if r.status_code == 403 and b"jschallenge" in r.content:
+                    last = RuntimeError("CDN bot challenge (403)")
+                    print(f"  sp3: challenged, backing off {wait:.0f}s "
+                          f"(slow down with SP3_WORKERS / SP3_REQ_GAP)")
+                    time.sleep(wait)
+                    wait *= 2
+                    continue
                 r.raise_for_status()
                 return r.content
             except httpx.HTTPStatusError:
-                raise                      # 404 etc. — don't retry
+                raise                      # 404 etc. — a real answer, don't retry
             except Exception as e:  # noqa: BLE001
                 last = e
                 time.sleep(0.5 * (attempt + 1))

@@ -55,6 +55,10 @@ jobs:
           SITES: ${{ github.event.inputs.sites || 'vtrd sc wos zxart s4e sp3 alf tosec vgm' }}
           MAX_FILES: ${{ github.event.inputs.max_files || '400' }}
           MAX_DEPTH: ${{ github.event.inputs.max_depth || '4' }}
+          # spectrum3.es sits behind a rate-limiting CDN that answers a too-eager
+          # crawler with a JS bot challenge — pace the ~3300 detail-page fetches.
+          SP3_WORKERS: "3"
+          SP3_REQ_GAP: "0.2"
         run: |
           args=""
           for s in $SITES; do args="$args --site $s"; done
