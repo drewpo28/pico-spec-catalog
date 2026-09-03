@@ -65,6 +65,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "s4e":
         from app.adapters.s4e import S4eAdapter        # lazy (needs httpx)
         return S4eAdapter()
+    if site == "sp3":
+        from app.adapters.sp3 import Sp3Adapter        # lazy (needs httpx)
+        return Sp3Adapter()
     if site == "tosec":
         from app.adapters.tosec import TosecAdapter    # lazy (needs httpx)
         return TosecAdapter()
@@ -121,13 +124,15 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
       - else `mirror` within budget → the bytes are fetched/unzipped and written
         under files/, locator = that static path;
       - else empty (not available).
-    Returns the number of files mirrored (link-only entries don't count)."""
+    Returns (files mirrored, file entries listed). Link-only entries count
+    toward the second only."""
     site_dir = os.path.join(outroot, adapter.id)
     os.makedirs(site_dir, exist_ok=True)
 
     queue: list[str] = [""]
     seen: set[str] = {""}
     files_done = 0
+    files_listed = 0
 
     while queue:
         path = queue.pop(0)
@@ -168,12 +173,13 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
                     except Exception as ex:  # noqa: BLE001
                         print(f"  ! fetch({path!r},{e.name!r}) failed: {ex}", file=sys.stderr)
                 lines.append(f"F\t{clean(e.name)}\t{size}\t{url}")
+                files_listed += 1
 
         with open(os.path.join(site_dir, slug(path) + ".tsv"), "w", encoding="utf-8") as fh:
             fh.write("".join(l + "\n" for l in lines))
         print(f"  {adapter.id}/{slug(path)}.tsv  ({len(entries)} entries)")
 
-    return files_done
+    return files_done, files_listed
 
 
 SPEEDTEST_NAME = "speedtest.bin"
@@ -219,6 +225,11 @@ def main() -> None:
                     help="never emit direct URLs; always mirror within budget")
     ap.add_argument("--max-files", type=int, default=0, help="cap mirrored files (0 = no cap)")
     ap.add_argument("--max-depth", type=int, default=4, help="max directory recursion depth")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="don't fail when a site exports zero file entries (by default "
+                         "that aborts the build: an upstream redesign that silently "
+                         "breaks a scraper must not replace a full catalog on Pages "
+                         "with empty listings)")
     args = ap.parse_args()
 
     sites = args.site or ["vtrd"]
@@ -230,8 +241,14 @@ def main() -> None:
         max_files = int(mf) if mf else args.max_files
         print(f"== exporting {sid} (max-files {max_files}) ==")
         a = build_adapter(sid)
-        export(a, args.out, mirror=args.mirror, link=args.link,
-               max_files=max_files, max_depth=args.max_depth)
+        _, listed = export(a, args.out, mirror=args.mirror, link=args.link,
+                           max_files=max_files, max_depth=args.max_depth)
+        if listed == 0 and not args.allow_empty:
+            # Every source has files. Zero listed means the scraper no longer
+            # understands the site (or it is down) — deploying would wipe the
+            # working catalog. Fail; the previous Pages deploy stays live.
+            raise SystemExit(f"{sid}: exported 0 file entries — upstream markup "
+                             f"changed or site unreachable (pass --allow-empty to override)")
         manifest.append(f"{a.id}\t{clean(a.name)}")
 
     with open(os.path.join(args.out, "sites.tsv"), "w", encoding="utf-8") as fh:

@@ -32,6 +32,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "s4e":
             from .s4e import S4eAdapter      # lazy (httpx) — spectrum4ever.org releases
             reg["s4e"] = S4eAdapter()
+        elif sid == "sp3":
+            from .sp3 import Sp3Adapter      # lazy (httpx) — spectrum3.es +3 DSK conversions
+            reg["sp3"] = Sp3Adapter()
         elif sid == "tosec":
             from .tosec import TosecAdapter  # lazy (httpx) — TOSEC packs on archive.org
             reg["tosec"] = TosecAdapter()

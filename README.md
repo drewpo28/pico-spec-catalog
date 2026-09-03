@@ -77,7 +77,7 @@ curl -OJ 'http://localhost:8080/v1/get?site=vtrd&path=A&name=<file>'
 ## Adapters (`app/adapters/`)
 
 Enable sources with `CATALOG_SITES` (comma/space list; code default `vtrd`, the
-Action builds `vtrd sc wos zxart s4e alf tosec vgm`). The order is the order shown in the device picker.
+Action builds `vtrd sc wos zxart s4e sp3 alf tosec vgm`). The order is the order shown in the device picker.
 
 | id      | source                       | how |
 |---------|------------------------------|-----|
@@ -85,7 +85,8 @@ Action builds `vtrd sc wos zxart s4e alf tosec vgm`). The order is the order sho
 | `sc`    | [Spectrum Computing](https://spectrumcomputing.co.uk/) | listing built from the ZXDB MySQL dump; files served from `spectrumcomputing.co.uk` (device TLS handles its cert via mbedTLS `SHA384_C`) |
 | `wos`   | [worldofspectrum.net](https://worldofspectrum.net/) | same ZXDB listing as `sc` (one shared dump parse); files served from the `worldofspectrum.net` mirror |
 | `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
-| `s4e`   | [spectrum4ever.org](https://spectrum4ever.org/) | Full Tape Crack Pack releases; HTML scrape, raw .TAP/.TZX via `download.php` (`&fn=/…` names the saved file) |
+| `s4e`   | [spectrum4ever.org](https://spectrum4ever.org/) | Full Tape Crack Pack releases; HTML scrape of `/en/releases?letter=X`, raw .TAP/.TZX via `download.php` (`&fn=/…` names the saved file). The site restyles often (three class renames in 2026), so the parser walks the DOM from the `download.php` link and reads fields off semantic anchors (`/releases/`, `/authors/` hrefs, `data-tape-*` attrs) rather than CSS classes |
+| `sp3`   | [spectrum3.es](https://spectrum3.es/) | Spanish +3 disk conversions (.DSK). Both shelves — the classic A–Z archive (`archivo.html`) and the year-indexed *Nueva Era* homebrew shelf — are merged into one alphabet (`0-9`, `A`–`Z`), each letter a flat, sorted list of every conversion (`TITLE (YEAR)  AUTHOR [TOOL]  LANGS`), with each locator pointing at the .dsk wherever it really lives. ≈3300 games / ≈5560 disks, scraped from the per-game detail pages (8 parallel fetches, ~90 s). Direct links (`?fn=/…` names the saved file). The Hostinger CDN 403s bare httpx headers — the adapter sends browser-shaped `Accept`/`Accept-Language`. TLS is ECDSA-only (Let's Encrypt YE2 → ISRG Root X2, cross-signed by X1): the device's `cacert.pem` must carry the ISRG roots |
 | `alf`   | [zxbyte.org](http://zxbyte.org/) | ALF cartridge images (HTML scrape) |
 | `tosec` | [ZX Spectrum TOSEC set on archive.org](https://archive.org/details/zx_spectrum_tosec_set_september_2023) | Demos + Games as `<section>/<format>/<letter>` from the public September-2023 set (≈TOSEC v2023-06-10; the canonical `tosec-main` item is login-gated). Listings come from archive.org's zip view of `Demos.zip`/`Games.zip`; the device streams single raw `.tap`/`.trd`/… members out of the packs from the datanode (`view_archive.php`, chunked → needs a firmware with the 2026-07 HttpsGet chunked support) |
 | `vgm`   | [vgmrips.net](https://vgmrips.net/) | VGM music packs for the chips pico-spec can drive (`AY-3-8910`, `SAA1099`, `SN76489`, `YM2203`, `YM2413`, `YM3812`, `YMF262`), as `<chip>/<pack>/<track>.vgm`. HTML scrape of the per-chip pack listings ([packs/chips](https://vgmrips.net/packs/chips)); dual-chip rips ("2xSN76489" etc.) have no category of their own upstream and appear inside the base chip's dir, and same-die card tags (AD-Lib/Sound Blaster/OPLL variants) are unioned in. Tracks are `.vgz` (gzipped `.vgm`) served as **direct links** — the Pages tree carries listings only (no mirror budget, the full per-chip catalog fits) and the device downloads the `.vgz` itself and gunzips it to `.vgm` after the transfer (pico-speccy firmware ≥ the `claude/vgz-catalog-support` change; pico-spec has no VGM chips and doesn't list this source). Build-time scraping is spaced (`VGM_REQ_GAP`, default 0.5 s) and retried with backoff — sustained bulk downloads get tarpitted upstream. The site sits behind the Anubis anti-bot wall, which challenges browser UAs but passes honest bot UAs — both this adapter and the device fetch vgmrips with a truthful non-Mozilla UA |
@@ -97,7 +98,10 @@ server, so there's no second scraper to maintain.
 
 > Scraping selectors (e.g. `vtrd`) are best-effort — upstream sites have no stable
 > contract. The API layer, caching, zip-unpacking and streaming are production shape;
-> tune selectors against the live markup when a site changes.
+> tune selectors against the live markup when a site changes. As a safety net,
+> `gen_static.py` **fails the build** when a site exports zero file entries (a
+> redesign that breaks a scraper must not replace the live catalog with empty
+> listings — the previous Pages deploy stays up); `--allow-empty` overrides.
 
 ## Serverless mode — static export to GitHub Pages
 
@@ -156,6 +160,8 @@ python3 gen_static.py --out _site --site vtrd --max-files 400 --max-depth 2
 python3 gen_static.py --out _site --site sc
 python3 gen_static.py --out _site --site wos
 python3 gen_static.py --out _site --site zxart
+python3 gen_static.py --out _site --site s4e
+python3 gen_static.py --out _site --site sp3
 python3 gen_static.py --out _site --site tosec
 python3 gen_static.py --out _site --site vgm
 # _site/ is the Pages root; sites.tsv + per-site trees live there.
@@ -171,7 +177,7 @@ This repo **is** the dedicated catalog, so deployment is just enabling Pages:
 1. Push this repo to GitHub (`drewpo28/pico-spec-catalog`).
 2. **Settings → Pages → Source: GitHub Actions**.
 3. **Actions → Build catalog (Pages) → Run workflow** (or wait for the daily cron
-   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart s4e alf tosec vgm"`, `MAX_FILES=400`,
+   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart s4e sp3 alf tosec vgm"`, `MAX_FILES=400`,
    `MAX_DEPTH=4` by default) and deploys `_site/` to Pages.
 4. The catalog is then live at `https://drewpo28.github.io/pico-spec-catalog/` — which
    is the device's built-in default (`catalog_host` empty).
