@@ -33,10 +33,11 @@ builds of the same game apart; remaining exact duplicates are numbered.
 
 Files are plain static .dsk (Content-Type text/plain, no zip) served by the
 Hostinger CDN, so they are exposed as direct links (link mode, nothing
-mirrored — the ~5560 disks are ~1 GB, far past the Pages budget). The device names the saved file after the locator's last path
-segment and does not percent-decode it, so — as for s4e — the URL gets a dummy
-query whose value starts with '/' and ends with an ASCII filename; static
-hosting ignores the query (verified byte-identical):
+mirrored — the ~5560 disks are ~1 GB, far past the Pages budget). The device
+names the saved file after the locator's last path segment and does not
+percent-decode it, so — as for s4e — the URL gets a dummy query whose value
+starts with '/' and ends with an ASCII filename; static hosting ignores the
+query (verified byte-identical):
 
     …/Aaargh!/Aaargh%20%7Bnugget%20Loader8%7D.dsk?fn=/Aaargh_(nugget_Loader8).dsk
 
@@ -99,6 +100,7 @@ _TD = re.compile(r"<td[^>]*>(.*?)</td>", re.S | re.I)
 _HREF = re.compile(r'<a\s+href="([^"]*)"', re.I)
 _IMG = re.compile(r'<img[^>]*src="([^"]*)"', re.I)
 _H1 = re.compile(r'size="7"[^>]*>(.*?)</font>', re.S | re.I)
+_QUAL = re.compile(r"\(([^)]{2,20})\)\s*$")   # "ROBOT ATTACK (Pistola)" → light-gun version
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _FN_SAFE = re.compile(r"[^A-Za-z0-9._()-]+")
@@ -107,13 +109,69 @@ IMAGE_EXTS = {".dsk", ".tap", ".tzx", ".z80", ".sna", ".trd", ".scl", ".zip"}
 
 @dataclass
 class _Game:
-    title: str          # card title (UPPERCASE on the site)
+    title: str          # card title (UPPERCASE on the site) — decides the bucket
     year: int | None    # Nueva Era year, None for the classic shelf
     page: str           # detail page, site-relative, percent-decoded
 
 
 def _text(html: str) -> str:
     return _WS.sub(" ", unescape(_TAG.sub("", html)).replace("\xa0", " ")).strip()
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", s).lower())
+
+
+# Words lowercased inside a title; anything else all-caps gets de-shouted unless
+# it looks like an acronym (no vowels) or a roman numeral.
+_MINOR = {"the", "and", "of", "a", "an", "to", "on", "in", "at", "for", "or",
+          "de", "del", "la", "el", "los", "las", "en", "y", "un", "una"}
+_ACRONYM = re.compile(r"^(?:[BCDFGHJKLMNPQRSTVWXZ0-9]{1,4}|[IVXL]+|US|UK)$")
+
+
+def _cap(s: str) -> str:
+    """"BUTCHER HILL (US GOLD)" → "Butcher Hill (US Gold)" — the shelves shout
+    their titles, so de-shout them, keeping acronyms (BMX, WCB, GT, ZX) and roman
+    numerals (XENO II) intact."""
+    out: list[str] = []
+    seen_word = False
+    for w in s.split():
+        core = w.strip("().,:;!?'\"")
+        if not w.isupper():
+            out.append(w)
+        elif core.lower() in _MINOR and seen_word:
+            out.append(w.lower())
+        elif _ACRONYM.match(core):
+            out.append(w)
+        else:                                 # de-shout, keeping any wrapping punctuation
+            out.append(re.sub(r"[A-Za-z].*", lambda m: m.group(0)[:1] + m.group(0)[1:].lower(), w, count=1))
+        if core.isalpha():
+            seen_word = True
+    return " ".join(out)
+
+
+def _pick_title(card: str, h1: str) -> str:
+    """The card title decides the letter bucket; the detail page's heading has the
+    nicer casing and is often fuller ("RUFF AND REDDY" → "…in The Space
+    Adventure"). But a few detail pages are copy-paste wrong (Butcher Hill's says
+    "Bumpy"), so the heading is only trusted when it clearly names the same game —
+    a shared prefix over 60% of the shorter title. A qualifier the card carries and
+    the heading dropped ("(Pistola)" = light-gun version) is kept either way."""
+    nc, nh = _norm(card), _norm(h1)
+    if not nh:
+        return _cap(card)
+    lcp = 0
+    for a, b in zip(nc, nh):
+        if a != b:
+            break
+        lcp += 1
+    if lcp < 0.6 * min(len(nc), len(nh)):
+        return _cap(card)                     # heading names a different game
+    out = h1
+    q = _QUAL.search(card)
+    if q and _norm(q.group(1)) not in nh:
+        out = f"{out} ({_cap(q.group(1))})"
+    return out
 
 
 def _bucket(title: str) -> str:
@@ -230,9 +288,7 @@ class Sp3Adapter(Adapter):
             print(f"  sp3: skip {g.page}: {e}")
             return []
         m = _H1.search(html)
-        title = _text(m.group(1)) if m else ""
-        if not title:
-            title = g.title.title()
+        title = _pick_title(g.title, _text(m.group(1)) if m else "")
         dir_ = g.page.rsplit("/", 1)[0] + "/"
         out = []
         for row in _TR.findall(html):
