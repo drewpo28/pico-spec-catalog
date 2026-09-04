@@ -27,7 +27,7 @@ import zipfile
 
 import httpx
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 ZXDB_ZIP_URL = "https://github.com/zxdb/ZXDB/raw/HEAD/ZXDB_mysql.sql.zip"  # HEAD = default branch
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -225,7 +225,7 @@ class ScAdapter(Adapter):
                                                    # the device or the handshake fails -0x4E00.
 
     def __init__(self):
-        self._client = httpx.Client(
+        self._client = http_client(
             timeout=180.0, follow_redirects=True,
             headers={"User-Agent": UA},
         )

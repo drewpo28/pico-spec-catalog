@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import re
 
-import httpx
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 PAGES = [
     "https://zxbyte.org/alf_games.htm",     # ALF-1..10 + 1-4 compilation
@@ -42,7 +41,7 @@ class AlfAdapter(Adapter):
     name = "ALF cartridges"
 
     def __init__(self):
-        self._client = httpx.Client(
+        self._client = http_client(
             headers={"User-Agent": "Mozilla/5.0 pico-spec-catalog/1.0"},
             timeout=30.0, follow_redirects=True,
         )

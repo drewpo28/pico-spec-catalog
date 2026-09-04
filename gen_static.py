@@ -28,6 +28,12 @@ unzips to a ready .trd/.tap; doing it here (server-side, browser UA) means the
 device just GETs a plain static URL. This is the proxy's /v1/get moved to build
 time — the documented fallback for Cloudflare-hard / archive-packed sites.
 
+A source that is down, blocked or newly unparseable does not fail the build: its
+subtree is copied back from the live Pages deploy (--pages-url / PAGES_BASE_URL)
+so the device keeps yesterday's catalog for that one site while the rest rebuild.
+Only a failure with nothing to fall back to aborts the run, leaving the previous
+deploy untouched.
+
 Usage:
     python3 gen_static.py --out ../../_site --site vtrd
     python3 gen_static.py --out _site --site vtrd --max-files 500 --max-depth 2
@@ -37,12 +43,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
+from urllib.parse import quote
 
 # Make `app` importable when run from tools/catalog-server/ or elsewhere.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app.adapters.base import Adapter, Entry          # noqa: E402
+from app.adapters.base import Adapter, Entry, SourceDown, http_client  # noqa: E402
 
 
 def build_adapter(site: str) -> Adapter:
@@ -140,10 +148,10 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
             entries = adapter.list(path)
         except Exception as e:  # noqa: BLE001 — degrade gracefully, skip this dir
             if path == "":
-                # A failed root listing means the whole site came out empty —
+                # A failed root listing means the whole site comes out empty —
                 # deploying that would replace a full catalog on Pages with
-                # nothing. Fail the build; the previous deploy stays live.
-                raise SystemExit(f"{adapter.id}: root listing failed: {e}")
+                # nothing. Hand it to main, which re-publishes the live tree.
+                raise SourceDown(f"{adapter.id}: root listing failed: {e}")
             print(f"  ! list({path!r}) failed: {e}", file=sys.stderr)
             entries = []
 
@@ -180,6 +188,57 @@ def export(adapter: Adapter, outroot: str, *, mirror: bool, link: bool,
         print(f"  {adapter.id}/{slug(path)}.tsv  ({len(entries)} entries)")
 
     return files_done, files_listed
+
+
+def salvage(site: str, outroot: str, base: str) -> int:
+    """Re-publish a site's subtree by copying it from the live Pages deploy.
+
+    A source being down or blocked must not cost the device its catalog: the
+    listings this run failed to build are still being served by the previous
+    deploy, so pull them back into the new tree and let the build succeed with
+    yesterday's data for that one site. Every other source still rebuilds
+    normally — before this, one dead site failed the whole build and froze all
+    nine (spectrum3.es, 2026-09-04).
+
+    Walks the .tsv tree from <site>/_root.tsv through the D rows' child slugs and
+    copies any mirrored file the F rows point at (a locator that is a full URL
+    belongs to the source, not to us — nothing to copy). Returns the number of
+    files copied; 0 means there was nothing to fall back to."""
+    client = http_client(timeout=60.0, follow_redirects=True)
+    shutil.rmtree(os.path.join(outroot, site), ignore_errors=True)
+    queue = [f"{site}/_root.tsv"]
+    seen = set(queue)
+    got = 0
+    while queue:
+        rel = queue.pop(0)
+        try:
+            r = client.get(f"{base}/{quote(rel)}")
+            r.raise_for_status()
+        except Exception as e:  # noqa: BLE001 — a gap is survivable, report it
+            print(f"  ! salvage {rel}: {e}", file=sys.stderr)
+            continue
+        dst = os.path.join(outroot, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "wb") as fh:
+            fh.write(r.content)
+        got += 1
+        if not rel.endswith(".tsv"):
+            continue
+        for line in r.text.splitlines():
+            col = line.split("\t")
+            if len(col) < 4 or not col[3]:
+                continue
+            if col[0] == "D":
+                child = f"{site}/{col[3]}.tsv"
+            elif col[3].startswith(f"{site}/"):
+                child = col[3]                  # mirrored bytes under files/
+            else:
+                continue                        # direct source URL — not ours
+            if child not in seen:
+                seen.add(child)
+                queue.append(child)
+    print(f"  {site}: salvaged {got} files from {base}")
+    return got
 
 
 SPEEDTEST_NAME = "speedtest.bin"
@@ -230,7 +289,13 @@ def main() -> None:
                          "that aborts the build: an upstream redesign that silently "
                          "breaks a scraper must not replace a full catalog on Pages "
                          "with empty listings)")
+    ap.add_argument("--pages-url", default=os.environ.get("PAGES_BASE_URL", ""),
+                    help="base URL of the live Pages deploy (env PAGES_BASE_URL). When "
+                         "a source is down or blocked, its subtree is copied from there "
+                         "instead of failing the build — the device keeps yesterday's "
+                         "catalog for that site while the others rebuild")
     args = ap.parse_args()
+    pages_url = args.pages_url.rstrip("/")
 
     sites = args.site or ["vtrd"]
     os.makedirs(args.out, exist_ok=True)
@@ -241,14 +306,27 @@ def main() -> None:
         max_files = int(mf) if mf else args.max_files
         print(f"== exporting {sid} (max-files {max_files}) ==")
         a = build_adapter(sid)
-        _, listed = export(a, args.out, mirror=args.mirror, link=args.link,
-                           max_files=max_files, max_depth=args.max_depth)
-        if listed == 0 and not args.allow_empty:
-            # Every source has files. Zero listed means the scraper no longer
-            # understands the site (or it is down) — deploying would wipe the
-            # working catalog. Fail; the previous Pages deploy stays live.
-            raise SystemExit(f"{sid}: exported 0 file entries — upstream markup "
-                             f"changed or site unreachable (pass --allow-empty to override)")
+        listed, why = 0, ""
+        try:
+            _, listed = export(a, args.out, mirror=args.mirror, link=args.link,
+                               max_files=max_files, max_depth=args.max_depth)
+        except SourceDown as e:          # the adapter gave up on the whole site
+            why = str(e)
+        except Exception as e:  # noqa: BLE001 — a broken scraper is a dead site too
+            why = f"{sid}: export failed: {e}"
+        # Every source has files. Zero listed means the scraper no longer
+        # understands the site (or it is down) — deploying that would wipe the
+        # working catalog.
+        if listed == 0 and not why and not args.allow_empty:
+            why = (f"{sid}: exported 0 file entries — upstream markup changed or "
+                   f"site unreachable")
+        if why:
+            print(f"  ! {why}", file=sys.stderr)
+            if not pages_url or not salvage(sid, args.out, pages_url):
+                # Nothing to fall back to — fail, so the previous deploy stays live
+                # in full rather than being replaced by a hole.
+                raise SystemExit(f"{why} (no Pages fallback; --allow-empty overrides)")
+            print(f"  ! {sid}: kept the tree already published on Pages")
         manifest.append(f"{a.id}\t{clean(a.name)}")
 
     with open(os.path.join(args.out, "sites.tsv"), "w", encoding="utf-8") as fh:

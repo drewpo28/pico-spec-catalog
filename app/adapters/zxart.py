@@ -31,9 +31,8 @@ import sys
 import time
 from urllib.parse import unquote
 
-import httpx
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 API = "https://zxart.ee/api"
 
@@ -66,7 +65,7 @@ class ZxartAdapter(Adapter):
         # generate — a 30 s timeout made every cold page look like a failure
         # and silently truncated the crawl (hw-hit: catalog stopped at release
         # id ~447832 of ~601k, dropping every prod newer than ~2023).
-        self._client = httpx.Client(
+        self._client = http_client(
             headers={"User-Agent": "pico-spec-catalog/1.0"},
             timeout=120.0, follow_redirects=True,
         )

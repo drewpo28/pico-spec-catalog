@@ -72,7 +72,7 @@ from urllib.parse import unquote
 
 import httpx
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 BASE = "https://vgmrips.net"
 UA = "pico-spec-catalog/1.0 (+https://github.com/drewpo28/pico-spec-catalog)"
@@ -136,7 +136,7 @@ class VgmAdapter(Adapter):
     def __init__(self):
         # Short read timeout on purpose: a tarpitted request must fail fast
         # into the retry/backoff below, not stall the build for minutes.
-        self._client = httpx.Client(
+        self._client = http_client(
             timeout=httpx.Timeout(30.0, connect=15.0),
             follow_redirects=True, headers={"User-Agent": UA},
         )

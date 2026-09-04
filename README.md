@@ -86,7 +86,7 @@ Action builds `vtrd sc wos zxart s4e sp3 alf tosec vgm`). The order is the order
 | `wos`   | [worldofspectrum.net](https://worldofspectrum.net/) | same ZXDB listing as `sc` (one shared dump parse); files served from the `worldofspectrum.net` mirror |
 | `zxart` | [zxart.ee](https://zxart.ee/) | JSON export API (Games + Demoscene) |
 | `s4e`   | [spectrum4ever.org](https://spectrum4ever.org/) | Full Tape Crack Pack releases; HTML scrape of `/en/releases?letter=X`, raw .TAP/.TZX via `download.php` (`&fn=/…` names the saved file). The site restyles often (three class renames in 2026), so the parser walks the DOM from the `download.php` link and reads fields off semantic anchors (`/releases/`, `/authors/` hrefs, `data-tape-*` attrs) rather than CSS classes |
-| `sp3`   | [spectrum3.es](https://spectrum3.es/) | Spanish +3 disk conversions (.DSK). Both shelves — the classic A–Z archive (`archivo.html`) and the year-indexed *Nueva Era* homebrew shelf — are merged into one alphabet (`0-9`, `A`–`Z`), each letter a flat, sorted list of every conversion (`TITLE (YEAR)  AUTHOR [TOOL]  LANGS`), with each locator pointing at the .dsk wherever it really lives. ≈3300 games / ≈5560 disks, scraped from the per-game detail pages (8 parallel fetches, ~90 s). Direct links (`?fn=/…` names the saved file). The Hostinger CDN in front of the site 403s bare httpx headers (browser-shaped `Accept`/`Accept-Language` pass) and rate-limits by IP with a JS "Checking your browser" challenge, so the crawl is deliberately slow (`SP3_WORKERS`=3, `SP3_REQ_GAP`=1 s → one request per second, ~1 h for the whole site, which the nightly cron can afford) and backs off when challenged; a challenge that survives four backoffs **aborts the build** (the JS challenge is unsolvable by both the exporter and the device, and a half-crawled catalog must not replace the live one) TLS is ECDSA-only (Let's Encrypt YE2 → ISRG Root X2, cross-signed by X1): the device's `cacert.pem` must carry the ISRG roots |
+| `sp3`   | [spectrum3.es](https://spectrum3.es/) | Spanish +3 disk conversions (.DSK). Both shelves — the classic A–Z archive (`archivo.html`) and the year-indexed *Nueva Era* homebrew shelf — are merged into one alphabet (`0-9`, `A`–`Z`), each letter a flat, sorted list of every conversion (`TITLE (YEAR)  AUTHOR [TOOL]  LANGS`), with each locator pointing at the .dsk wherever it really lives. ≈3300 games / ≈5560 disks, scraped from the per-game detail pages. Direct links (`?fn=/…` names the saved file). The Hostinger CDN in front of the site 403s bare httpx headers (browser-shaped `Accept`/`Accept-Language` pass), rate-limits by IP with a JS "Checking your browser" challenge and, after one full nightly crawl, dropped the runner's IP outright (2026-09-04). So the crawl is both small and slow: detail pages are cached between builds (`SP3_CACHE`) and only the new ones plus the `SP3_REFRESH` (300) stalest are re-read — ~300 requests / ~5 min a night, every page still refreshed within a fortnight — at one request per second (`SP3_WORKERS`=3, `SP3_REQ_GAP`=1 s). A challenge that survives four backoffs, an index page that will not load, or a crawl failing more than `SP3_FAIL_RATIO` (20%) of its fetches **aborts the site** (the JS challenge is unsolvable by both the exporter and the device, and a half-crawled catalog must not replace the live one) — the build then falls back to the sp3 tree already on Pages. TLS is ECDSA-only (Let's Encrypt YE2 → ISRG Root X2, cross-signed by X1): the device's `cacert.pem` must carry the ISRG roots |
 | `alf`   | [zxbyte.org](http://zxbyte.org/) | ALF cartridge images (HTML scrape) |
 | `tosec` | [ZX Spectrum TOSEC set on archive.org](https://archive.org/details/zx_spectrum_tosec_set_september_2023) | Demos + Games as `<section>/<format>/<letter>` from the public September-2023 set (≈TOSEC v2023-06-10; the canonical `tosec-main` item is login-gated). Listings come from archive.org's zip view of `Demos.zip`/`Games.zip`; the device streams single raw `.tap`/`.trd`/… members out of the packs from the datanode (`view_archive.php`, chunked → needs a firmware with the 2026-07 HttpsGet chunked support) |
 | `vgm`   | [vgmrips.net](https://vgmrips.net/) | VGM music packs for the chips pico-spec can drive (`AY-3-8910`, `SAA1099`, `SN76489`, `YM2203`, `YM2413`, `YM3812`, `YMF262`), as `<chip>/<pack>/<track>.vgm`. HTML scrape of the per-chip pack listings ([packs/chips](https://vgmrips.net/packs/chips)); dual-chip rips ("2xSN76489" etc.) have no category of their own upstream and appear inside the base chip's dir, and same-die card tags (AD-Lib/Sound Blaster/OPLL variants) are unioned in. Tracks are `.vgz` (gzipped `.vgm`) served as **direct links** — the Pages tree carries listings only (no mirror budget, the full per-chip catalog fits) and the device downloads the `.vgz` itself and gunzips it to `.vgm` after the transfer (pico-speccy firmware ≥ the `claude/vgz-catalog-support` change; pico-spec has no VGM chips and doesn't list this source). Build-time scraping is spaced (`VGM_REQ_GAP`, default 0.5 s) and retried with backoff — sustained bulk downloads get tarpitted upstream. The site sits behind the Anubis anti-bot wall, which challenges browser UAs but passes honest bot UAs — both this adapter and the device fetch vgmrips with a truthful non-Mozilla UA |
@@ -94,14 +94,23 @@ Action builds `vtrd sc wos zxart s4e sp3 alf tosec vgm`). The order is the order
 Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
 `app/adapters/base.py`) and registering it in `app/adapters/__init__.py` — the
 firmware needs no changes. `gen_static.py` reuses the **same adapters** as the
-server, so there's no second scraper to maintain.
+server, so there's no second scraper to maintain. Build the HTTP client with
+`base.http_client()`, never `httpx.Client()` directly: it pins the socket to
+IPv4. httpx has no Happy Eyeballs, so on a GitHub runner (no IPv6 route) a source
+that publishes AAAA records — `spectrum3.es`, `worldofspectrum.net` — dies with
+`[Errno 101] Network is unreachable` the moment the resolver puts the AAAA first.
+A wholesale failure (index unreachable, crawl mostly erroring) should raise
+`base.SourceDown`, which aborts that site at once instead of retrying it once per
+directory, and hands `gen_static.py` its Pages fallback.
 
 > Scraping selectors (e.g. `vtrd`) are best-effort — upstream sites have no stable
 > contract. The API layer, caching, zip-unpacking and streaming are production shape;
 > tune selectors against the live markup when a site changes. As a safety net,
-> `gen_static.py` **fails the build** when a site exports zero file entries (a
+> `gen_static.py` refuses to publish a site that exports zero file entries (a
 > redesign that breaks a scraper must not replace the live catalog with empty
-> listings — the previous Pages deploy stays up); `--allow-empty` overrides.
+> listings): it re-publishes that site's subtree from the live Pages deploy and,
+> only if there is nothing to fall back to, fails the build so the previous
+> deploy stays up whole. `--allow-empty` overrides.
 
 ## Serverless mode — static export to GitHub Pages
 
@@ -183,4 +192,15 @@ This repo **is** the dedicated catalog, so deployment is just enabling Pages:
    is the device's built-in default (`catalog_host` empty).
 
 The workflow lives at `.github/workflows/catalog.yml` (daily cron +
-`workflow_dispatch` with `sites` / `max_files` / `max_depth` inputs).
+`workflow_dispatch` with `sites` / `max_files` / `max_depth` inputs). It also
+restores and saves sp3's detail-page cache (`actions/cache`, `.cache/`) around
+the export, so the nightly crawl stays small.
+
+**A dead source no longer fails the build.** When a site's export blows up or
+comes out empty — it is down, its IP got blocked, its markup changed — the
+exporter copies that site's subtree back from the live deploy
+(`PAGES_BASE_URL`, set by the workflow) and carries on. The device keeps
+yesterday's catalog for that one source while the other eight rebuild; the log
+says `! <site>: kept the tree already published on Pages`. Only a failure with
+nothing to fall back to aborts the run, and then the previous deploy stays live
+untouched. Locally: `--pages-url https://drewpo28.github.io/pico-spec-catalog`.

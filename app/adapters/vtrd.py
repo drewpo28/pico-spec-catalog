@@ -31,10 +31,9 @@ import time
 import zipfile
 from urllib.parse import urljoin
 
-import httpx
 from selectolax.parser import HTMLParser
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 BASE = "https://vtrd.in"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -54,7 +53,7 @@ class VtrdAdapter(Adapter):
     name = "Virtual TR-DOS"
 
     def __init__(self):
-        self._client = httpx.Client(
+        self._client = http_client(
             headers={"User-Agent": UA, "Accept-Language": "en,ru;q=0.8"},
             timeout=20.0, follow_redirects=True,
         )

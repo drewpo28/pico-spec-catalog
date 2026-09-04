@@ -50,16 +50,33 @@ jobs:
           python-version: "3.12"
       - name: Install adapter deps
         run: pip install -r requirements.txt
+      # spectrum3.es detail pages, parsed, from the previous run. Restored before
+      # the export and saved after it (even on failure — a partial crawl is still
+      # progress worth keeping), so a nightly build fetches ~300 pages instead of
+      # ~3360. Cache misses are harmless: the adapter then crawls in full.
+      - name: Restore sp3 page cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: sp3-cache-${{ github.run_id }}
+          restore-keys: sp3-cache-
       - name: Export static catalog
         env:
           SITES: ${{ github.event.inputs.sites || 'vtrd sc wos zxart s4e sp3 alf tosec vgm' }}
           MAX_FILES: ${{ github.event.inputs.max_files || '400' }}
           MAX_DEPTH: ${{ github.event.inputs.max_depth || '4' }}
+          # A source that is down or blocked falls back to its subtree on the live
+          # deploy instead of failing the build for all nine.
+          PAGES_BASE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
           # spectrum3.es sits behind a rate-limiting CDN that answers a too-eager
-          # crawler with a JS bot challenge — pace the ~3360 page fetches at one
-          # per second (~1 h). The nightly cron has the time; a block does not.
+          # crawler with a JS bot challenge, and dropped this runner's IP outright
+          # after a full nightly crawl (2026-09-04). Keep the crawl small (only new
+          # and stale detail pages, see SP3_CACHE/SP3_REFRESH) and slow (one request
+          # per second across all workers).
           SP3_WORKERS: "3"
           SP3_REQ_GAP: "1.0"
+          SP3_CACHE: .cache/sp3.json
+          SP3_REFRESH: "300"
         run: |
           args=""
           for s in $SITES; do args="$args --site $s"; done
@@ -67,6 +84,12 @@ jobs:
             --out "$GITHUB_WORKSPACE/_site" $args \
             --max-files "$MAX_FILES" --max-depth "$MAX_DEPTH"
           echo "== generated tree ==" && find "$GITHUB_WORKSPACE/_site" -type f | sort | head -50
+      - name: Save sp3 page cache
+        if: always()          # a crawl that died half-way still cached what it read
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: sp3-cache-${{ github.run_id }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

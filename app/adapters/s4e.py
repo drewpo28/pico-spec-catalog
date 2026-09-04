@@ -68,10 +68,9 @@ import re
 import time
 from urllib.parse import quote
 
-import httpx
 from selectolax.parser import HTMLParser, Node
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 BASE = "https://spectrum4ever.org"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -206,7 +205,7 @@ class S4eAdapter(Adapter):
     name = "Spectrum 4 Ever"
 
     def __init__(self):
-        self._client = httpx.Client(
+        self._client = http_client(
             timeout=60.0, follow_redirects=True, headers={"User-Agent": UA},
         )
         self._cache: dict[str, tuple[float, list[Entry]]] = {}

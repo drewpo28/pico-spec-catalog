@@ -46,9 +46,8 @@ import re
 import time
 from urllib.parse import quote, unquote
 
-import httpx
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, http_client
 
 BASE = "https://archive.org"
 ITEM = "zx_spectrum_tosec_set_september_2023"
@@ -113,7 +112,7 @@ class TosecAdapter(Adapter):
 
     def __init__(self):
         # The Games.zip listing is a 23 MB page — generous timeout.
-        self._client = httpx.Client(
+        self._client = http_client(
             timeout=300.0, follow_redirects=True, headers={"User-Agent": UA},
         )
         self._base: "tuple[float, str, str] | None" = None   # (expires, server, dir)

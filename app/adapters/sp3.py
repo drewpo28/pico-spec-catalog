@@ -44,6 +44,15 @@ query (verified byte-identical):
 Index pages are UTF-8, detail pages windows-1252 (declared) — decoded explicitly,
 httpx would assume UTF-8 for both since the CDN sends no charset.
 
+The detail pages are crawled incrementally: their parses live in a JSON cache
+(SP3_CACHE) carried between builds, and a run re-reads the 61 index pages —
+those are what reveal a new game — but only the pages the index shows for the
+first time plus the SP3_REFRESH stalest cached ones. ~300 requests a night
+instead of ~3360, with every page still re-read within a fortnight. The full
+nightly crawl is what got the CI runner's IP dropped by the CDN on 2026-09-04.
+Only each page's own facts are cached (heading + one [author, langs, href] per
+row), so display names and ?fn= URLs are rebuilt from live code every run.
+
 TLS: Let's Encrypt ECDSA P-256 (YE2 → Root YE → ISRG Root X2, cross-signed by
 ISRG Root X1), TLS1.2 ECDHE-ECDSA-AES128-GCM-SHA256 offered — RSA suites are
 refused, so the device needs its ECDSA key exchange (MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
@@ -53,6 +62,7 @@ ISRG roots.
 
 from __future__ import annotations
 
+import json
 import os
 import posixpath
 import re
@@ -66,7 +76,7 @@ from urllib.parse import quote, unquote
 
 import httpx
 
-from .base import Adapter, Entry
+from .base import Adapter, Entry, SourceDown, http_client
 
 BASE = "https://spectrum3.es/"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -84,14 +94,24 @@ REQ_GAP = float(os.environ.get("SP3_REQ_GAP", "1.0"))     # seconds between requ
 CHALLENGE_WAIT = float(os.environ.get("SP3_CHALLENGE_WAIT", "60"))  # 1st backoff, doubles
 RETRIES = 4
 
+# Detail pages are cached on disk between runs, so a nightly build re-reads the
+# 61 index pages (they are what reveals a new game) but only a slice of the ~3300
+# detail pages: everything the index shows for the first time, plus the REFRESH
+# stalest cached ones. At the default that is ~300 requests / ~5 minutes instead
+# of ~3360 / ~1 hour, and every page still comes round again inside a fortnight.
+# The old full nightly crawl is almost certainly what got the runner's IP dropped
+# by the Hostinger CDN on 2026-09-04; this is the fix for the cause, the IPv4 pin
+# in base.http_client and the Pages fallback in gen_static only for the symptom.
+CACHE_FILE = os.environ.get("SP3_CACHE", ".cache/sp3.json")   # "" disables the cache
+REFRESH = int(os.environ.get("SP3_REFRESH", "300"))           # stale pages per run
+# A crawl that is mostly failing is a blocked crawl, not a few dead links: past
+# this error rate (over a meaningful sample) the export aborts instead of baking
+# the failures into the cache and publishing a thinned-out catalog.
+FAIL_RATIO = float(os.environ.get("SP3_FAIL_RATIO", "0.2"))
+FAIL_MIN = 20
+CACHE_VERSION = 1          # bump to invalidate every cached record on disk
 
-class Blocked(BaseException):
-    """The CDN is challenging us and backing off did not help.
 
-    Deliberately NOT an Exception: gen_static's per-directory handler swallows
-    Exceptions and writes an empty listing, which for a mid-crawl block would
-    publish a truncated catalog (a few letters full, the rest empty). This
-    aborts the whole export instead, so the previous Pages deploy stays live."""
 YEARS = range(1992, 2026)
 LETTERS = ["0-9"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
@@ -218,17 +238,85 @@ class Sp3Adapter(Adapter):
         # The Hostinger CDN WAF 403s httpx's bare default header set (Accept: */*
         # + gzip and no Accept-Language reads as a bot); a browser-shaped Accept /
         # Accept-Language pair passes. curl and urllib pass as-is.
-        self._client = httpx.Client(
+        self._client = http_client(
             timeout=60.0, follow_redirects=True, headers={
                 "User-Agent": UA,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
             },
         )
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()          # held across the pacing sleep
+        self._clock = threading.Lock()         # short: page cache + counters
         self._next_req = 0.0
         self._games: tuple[float, list[_Game]] | None = None
         self._cache: dict[str, tuple[float, list[Entry]]] = {}
+        # detail page -> {"t": fetched-at, "h1": heading, "rows": [[author, langs, href]]}
+        self._pages: dict[str, dict] = {}
+        self._dirty = False
+        self._refresh: set[str] | None = None  # pages this run re-fetches
+        self._tries = self._fails = 0
+        self._load_pages()
+
+    # ── Detail-page cache (persisted between runs) ───────────────────────────
+    def _load_pages(self) -> None:
+        """Read the previous run's parsed detail pages. A missing, unreadable or
+        older-schema file just means a full crawl this time — never an error."""
+        if not CACHE_FILE:
+            return
+        try:
+            with open(CACHE_FILE, encoding="utf-8") as fh:
+                blob = json.load(fh)
+        except FileNotFoundError:
+            print(f"  sp3: no page cache at {CACHE_FILE} — crawling in full")
+            return
+        except Exception as e:  # noqa: BLE001 — a corrupt cache must not fail a build
+            print(f"  sp3: ignoring unreadable cache {CACHE_FILE}: {e}")
+            return
+        if blob.get("v") == CACHE_VERSION:
+            self._pages = blob.get("pages", {})
+        print(f"  sp3: {len(self._pages)} detail pages from {CACHE_FILE}")
+
+    def _save_pages(self) -> None:
+        """Write the cache back, atomically — a run killed mid-write (the crawl
+        is long enough for that to happen) must not leave a truncated file."""
+        if not CACHE_FILE or not self._dirty:
+            return
+        with self._clock:
+            blob = {"v": CACHE_VERSION, "pages": self._pages}
+            self._dirty = False
+        d = os.path.dirname(CACHE_FILE)
+        if d:
+            os.makedirs(d, exist_ok=True)
+        tmp = CACHE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(blob, fh)
+        os.replace(tmp, CACHE_FILE)
+
+    def _plan(self, games: list[_Game]) -> None:
+        """Pick this run's crawl: every page the shelves show that the cache has
+        never seen, plus the REFRESH stalest cached ones — so a new game appears
+        the night it is published and every page is re-read within REFRESH-sized
+        slices (a fortnight at the defaults). Pages the shelves dropped leave the
+        cache with them."""
+        live = {g.page for g in games}
+        for gone in set(self._pages) - live:
+            del self._pages[gone]
+            self._dirty = True
+        new = [p for p in live if p not in self._pages]
+        stale = sorted(live & set(self._pages), key=lambda p: self._pages[p].get("t", 0))
+        quota = max(0, REFRESH - len(new))
+        self._refresh = set(new) | set(stale[:quota])
+        print(f"  sp3: {len(live)} pages — {len(new)} new, {min(quota, len(stale))} "
+              f"refreshed, {len(live) - len(self._refresh)} served from cache")
+
+    def _health(self) -> None:
+        """A crawl that is mostly failing is a blocked crawl. Abort before the
+        failures get baked into the cache and published as a thinned catalog."""
+        with self._clock:
+            tries, fails = self._tries, self._fails
+        if tries >= FAIL_MIN and fails > FAIL_RATIO * tries:
+            raise SourceDown(f"spectrum3.es: {fails} of {tries} detail pages failed — "
+                             f"the crawler looks blocked, not the pages dead")
 
     # ── HTTP ─────────────────────────────────────────────────────────────────
     def _pace(self) -> None:
@@ -252,7 +340,7 @@ class Sp3Adapter(Adapter):
                 r = self._client.get(url)
                 if r.status_code == 403 and b"jschallenge" in r.content:
                     if attempt == RETRIES - 1:
-                        raise Blocked(
+                        raise SourceDown(
                             f"spectrum3.es: CDN bot challenge persists after "
                             f"{RETRIES} backoffs — the crawler's IP is rate-limited. "
                             f"Retry later and/or lower SP3_WORKERS / raise SP3_REQ_GAP.")
@@ -285,26 +373,40 @@ class Sp3Adapter(Adapter):
         if self._games and self._games[0] > time.time():
             return self._games[1]
         games: list[_Game] = []
-        for l in ["0"] + [chr(c) for c in range(ord("a"), ord("z") + 1)]:
-            games += self._index_page(f"Juegos/{l}.html", None)
-        for y in YEARS:
-            games += self._index_page(f"Nueva Era/Anos/{y}.html", y)
+        try:
+            for l in ["0"] + [chr(c) for c in range(ord("a"), ord("z") + 1)]:
+                games += self._index_page(f"Juegos/{l}.html", None)
+            for y in YEARS:
+                games += self._index_page(f"Nueva Era/Anos/{y}.html", y)
+        except Exception as e:  # noqa: BLE001 — an unloadable shelf is fatal
+            raise SourceDown(f"spectrum3.es: index page failed ({e}) — no alphabet to "
+                        f"build the tree from") from e
+        if not games:
+            raise SourceDown("spectrum3.es: index pages carry no game cards — the "
+                        "shelf markup changed")
         print(f"  sp3: {len(games)} games indexed (both shelves)")
+        self._plan(games)
         self._games = (time.time() + CACHE_TTL, games)
         return games
 
     # ── Detail page → conversions ────────────────────────────────────────────
-    def _versions(self, g: _Game) -> list[tuple[str, str, str, str]]:
-        """(title, author, langs, dsk_url) per conversion row of one game."""
+    def _scrape(self, page: str) -> dict | None:
+        """Fetch one detail page into a cache record, or None if it would not
+        load (a 404 card, a transient error). Only the page's own facts are
+        stored — the heading and one [author, langs, href] per conversion — so
+        the display name and the ?fn= URL are rebuilt from live code each run and
+        a cached record never freezes a naming decision."""
+        with self._clock:
+            self._tries += 1
         try:
-            html = _decode(self._get(g.page))
+            html = _decode(self._get(page))
         except Exception as e:  # noqa: BLE001 — a 404 is a dead upstream card
-            print(f"  sp3: skip {g.page}: {e}")
-            return []
+            with self._clock:
+                self._fails += 1
+            print(f"  sp3: skip {page}: {e}")
+            return None
         m = _H1.search(html)
-        title = _pick_title(g.title, _text(m.group(1)) if m else "")
-        dir_ = g.page.rsplit("/", 1)[0] + "/"
-        out = []
+        rows: list[list[str]] = []
         for row in _TR.findall(html):
             tds = _TD.findall(row)
             if len(tds) < 5:
@@ -314,7 +416,6 @@ class Sp3Adapter(Adapter):
                      and "://" not in h]
             if not links:
                 continue           # dead link / external itch.io page — nothing to serve
-            href = links[0]
             author = _text(tds[0])
             util = _text(tds[2])               # conversion tool (Z80onDSK, TAP2DSK…)
             if util:                           # — tells apart one author's two builds
@@ -323,9 +424,37 @@ class Sp3Adapter(Adapter):
             for src in _IMG.findall(tds[1]):
                 stem = os.path.splitext(unquote(src).rsplit("/", 1)[-1])[0].lower()
                 langs.append(LANGS.get(stem, stem[:3].upper()))
+            rows.append([author, "/".join(langs), links[0]])
+        return {"t": int(time.time()), "h1": _text(m.group(1)) if m else "", "rows": rows}
+
+    def _record(self, page: str) -> dict | None:
+        """The page's parse — from the cache unless this run's plan re-fetches
+        it. A failed re-fetch keeps the cached record: yesterday's rows beat no
+        rows, and a page that is really gone drops out via _plan when the shelves
+        stop listing it."""
+        cached = self._pages.get(page)
+        if cached is not None and self._refresh is not None and page not in self._refresh:
+            return cached
+        rec = self._scrape(page)
+        if rec is None:
+            return cached
+        with self._clock:
+            self._pages[page] = rec
+            self._dirty = True
+        return rec
+
+    def _versions(self, g: _Game) -> list[tuple[str, str, str, str]]:
+        """(title, author, langs, dsk_url) per conversion row of one game."""
+        rec = self._record(g.page)
+        if not rec:
+            return []
+        title = _pick_title(g.title, rec["h1"])
+        dir_ = g.page.rsplit("/", 1)[0] + "/"
+        out = []
+        for author, langs, href in rec["rows"]:
             path = posixpath.normpath(dir_ + unquote(href))   # HTML/../DSK/x → DSK/x
             url = BASE + quote(path) + "?fn=/" + _fn_name(href)
-            out.append((title, author, "/".join(langs), url))
+            out.append((title, author, langs, url))
         return out
 
     def _letter(self, letter: str) -> list[Entry]:
@@ -338,6 +467,8 @@ class Sp3Adapter(Adapter):
             for g, vs in zip(games, ex.map(self._versions, games)):
                 for title, author, langs, url in vs:
                     rows.append((title, g.year, author, langs, url))
+        self._save_pages()      # keep the letter's progress even if the next line aborts
+        self._health()
         rows.sort(key=lambda r: (r[0].casefold(), r[1] or 0, r[2].casefold()))
         entries: list[Entry] = []
         seen: set[str] = set()
