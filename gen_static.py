@@ -82,6 +82,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "vgm":
         from app.adapters.vgm import VgmAdapter        # lazy (needs httpx)
         return VgmAdapter()
+    if site == "tslabs":
+        from app.adapters.tslabs import TslabsAdapter  # lazy (needs httpx/selectolax)
+        return TslabsAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 
@@ -198,7 +201,7 @@ def salvage(site: str, outroot: str, base: str) -> int:
     deploy, so pull them back into the new tree and let the build succeed with
     yesterday's data for that one site. Every other source still rebuilds
     normally — before this, one dead site failed the whole build and froze all
-    nine (spectrum3.es, 2026-09-04).
+    nine (spectrum3.es, 2026-09-04; ten sources since tslabs joined).
 
     Walks the .tsv tree from <site>/_root.tsv through the D rows' child slugs and
     copies any mirrored file the F rows point at (a locator that is a full URL

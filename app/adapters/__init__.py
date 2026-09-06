@@ -41,6 +41,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "vgm":
             from .vgm import VgmAdapter      # lazy (httpx) — vgmrips.net VGM packs
             reg["vgm"] = VgmAdapter()
+        elif sid == "tslabs":
+            from .tslabs import TslabsAdapter  # lazy (httpx/selectolax) — TS-Conf .spg prods
+            reg["tslabs"] = TslabsAdapter()
     return reg
 
 
