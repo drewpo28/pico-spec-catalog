@@ -44,6 +44,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "tslabs":
             from .tslabs import TslabsAdapter  # lazy (httpx/selectolax) — TS-Conf .spg prods
             reg["tslabs"] = TslabsAdapter()
+        elif sid == "atm":
+            from .atm import AtmAdapter        # lazy (httpx/selectolax) — ATM-Turbo zips
+            reg["atm"] = AtmAdapter()
     return reg
 
 
