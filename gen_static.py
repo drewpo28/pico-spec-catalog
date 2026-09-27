@@ -88,6 +88,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "atm":
         from app.adapters.atm import AtmAdapter        # lazy (needs httpx/selectolax)
         return AtmAdapter()
+    if site == "zxtunes":
+        from app.adapters.zxtunes import ZxtunesAdapter  # lazy (needs httpx)
+        return ZxtunesAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 
