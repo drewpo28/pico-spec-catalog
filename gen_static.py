@@ -88,6 +88,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "atm":
         from app.adapters.atm import AtmAdapter        # lazy (needs httpx/selectolax)
         return AtmAdapter()
+    if site == "rzx":
+        from app.adapters.rzx import RzxAdapter        # lazy (needs httpx)
+        return RzxAdapter()
     if site == "zxtunes":
         from app.adapters.zxtunes import ZxtunesAdapter  # lazy (needs httpx)
         return ZxtunesAdapter()

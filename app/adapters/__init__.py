@@ -47,6 +47,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "atm":
             from .atm import AtmAdapter        # lazy (httpx/selectolax) — ATM-Turbo zips
             reg["atm"] = AtmAdapter()
+        elif sid == "rzx":
+            from .rzx import RzxAdapter          # lazy (httpx) — rzxarchive.co.uk recordings
+            reg["rzx"] = RzxAdapter()
         elif sid == "zxtunes":
             from .zxtunes import ZxtunesAdapter  # lazy (httpx) — zxtunes.com AY music by author
             reg["zxtunes"] = ZxtunesAdapter()
