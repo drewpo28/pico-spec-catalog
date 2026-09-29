@@ -7,7 +7,9 @@ the live site 2026-09-06):
 
     index.php?t=1   Demos       (~42 productions)
     index.php?t=2   Games       (~32)
-    index.php?t=3/4/5  Utilities / Examples / PC Tools — not exposed
+    index.php?t=4   Examples    (24 — hardware test/effect snippets, ~7 MB of zips;
+                                 added 2026-09-29, all runnable: .spg/.trd/.scl/.sna)
+    index.php?t=3/5 Utilities / PC Tools — not exposed
 
 Card markup (one <div class=row> per production):
 
@@ -52,7 +54,7 @@ yields several members each gets a "[variant]" suffix: the member's stem with
 the stem prefix common to all of them stripped ("Otter & Smoker  ERA … [NEOGS]",
 "[NoFX]", "[TAY]"), or the whole stem when stripping would leave a stub.
 
-Tree: Demos/ and Games/ at the root, each a flat, alphabetically sorted list.
+Tree: Demos/, Games/ and Examples/ at the root, each a flat, alphabetically sorted list.
 
 TLS (device side — the mirrored files come from Pages, this only matters for the
 dynamic /v1 server): Let's Encrypt RSA (YR1 → Root YR → ISRG Root X1),
@@ -80,7 +82,7 @@ CACHE_TTL = 6 * 3600       # a listing costs the whole ~60 MB crawl — keep it 
 REQ_GAP = float(os.environ.get("TSLABS_REQ_GAP", "0.5"))   # seconds between requests
 
 # dir shown on the device → index.php?t=<n>
-SECTIONS = [("Demos", 1), ("Games", 2)]
+SECTIONS = [("Demos", 1), ("Games", 2), ("Examples", 4)]
 
 # What the device's file browser (pico-speccy FileUtils DISK_ALLFILE) will open.
 # Order = preference: a zip's entries are the members of the FIRST of these
