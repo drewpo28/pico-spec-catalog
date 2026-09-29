@@ -1,0 +1,24 @@
+# TEMPORARY probe (claude/rzxarchive-probe only): dump rzxarchive.co.uk markup to
+# the log so the adapter can be written against the real HTML. Deleted afterwards.
+name: rzxarchive probe
+on:
+  push:
+    branches: [claude/rzxarchive-probe]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
+          for p in index.php a.php t.php; do
+            echo "=================== $p"
+            curl -sSL -4 -A "$UA" -D - -o page.html "https://www.rzxarchive.co.uk/$p" | head -20
+            wc -c page.html
+            echo "---- hrefs"; grep -oiE 'href="[^"]*"' page.html | sort | uniq -c | sort -rn | head -80
+            echo "---- body"; sed -n '1,400p' page.html | cut -c1-400
+          done
+          echo "=================== download probe"
+          curl -sSL -4 -A "$UA" "https://www.rzxarchive.co.uk/a.php" -o a.html
+          L=$(grep -oiE 'href="[^"]*\.(zip|rzx)"' a.html | head -1 | sed 's/href="//I;s/"$//')
+          echo "first link: $L"
+          [ -n "$L" ] && curl -sSL -4 -A "$UA" -D - -o dl.bin "https://www.rzxarchive.co.uk/$L" | head -20 && ls -l dl.bin && (unzip -l dl.bin || xxd dl.bin | head)
