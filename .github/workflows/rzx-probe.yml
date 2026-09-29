@@ -1,5 +1,4 @@
-# TEMPORARY probe (claude/rzxarchive-probe only): dump rzxarchive.co.uk markup to
-# the log so the adapter can be written against the real HTML. Deleted afterwards.
+# TEMPORARY probe (claude/rzxarchive-probe only). Deleted afterwards.
 name: rzxarchive probe
 on:
   push:
@@ -9,16 +8,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36'
-          for p in index.php a.php t.php; do
-            echo "=================== $p"
-            curl -sSL -4 -A "$UA" -D - -o page.html "https://www.rzxarchive.co.uk/$p" | head -20
-            wc -c page.html
-            echo "---- hrefs"; grep -oiE 'href="[^"]*"' page.html | sort | uniq -c | sort -rn | head -80
-            echo "---- body"; sed -n '1,400p' page.html | cut -c1-400
-          done
-          echo "=================== download probe"
-          curl -sSL -4 -A "$UA" "https://www.rzxarchive.co.uk/a.php" -o a.html
-          L=$(grep -oiE 'href="[^"]*\.(zip|rzx)"' a.html | head -1 | sed 's/href="//I;s/"$//')
-          echo "first link: $L"
-          [ -n "$L" ] && curl -sSL -4 -A "$UA" -D - -o dl.bin "https://www.rzxarchive.co.uk/$L" | head -20 && ls -l dl.bin && (unzip -l dl.bin || xxd dl.bin | head)
+          cat > p.py <<'PY'
+          import re, urllib.request, collections, io, zipfile
+          UA={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36'}
+          def get(u):
+              return urllib.request.urlopen(urllib.request.Request(u,headers=UA),timeout=60).read()
+          ext=collections.Counter(); rows=0; zips=[]; multi=0
+          for L in '0abcdefghijklmnopqrstuvwxyz':
+              h=get(f'https://www.rzxarchive.co.uk/{L}.php').decode('utf-8','replace')
+              trs=re.split(r'(?i)<tr>',h)
+              n=0
+              for t in trs:
+                  if 'Download' not in t or 'NAME=' not in t.upper(): continue
+                  n+=1
+                  dl=re.findall(r'(?i)href="([^"]+\.(?:rzx|zip))"',t)
+                  for d in dl: ext[d.rsplit('.',1)[1].lower()]+=1
+                  if len(dl)>1: multi+=1
+                  zips+= [d for d in dl if d.lower().endswith('.zip')]
+                  if L in '0a' and n<=25 or (len(dl)>1 and multi<=15):
+                      print('ROW',L,n,repr(t[:900])); print()
+              rows+=n; print('LETTER',L,n)
+          print('TOTAL rows',rows,'ext',ext,'multi',multi)
+          for z in zips[:4]:
+              b=get('https://www.rzxarchive.co.uk'+z if z.startswith('/') else 'https://www.rzxarchive.co.uk/'+z)
+              zf=zipfile.ZipFile(io.BytesIO(b)); print('ZIP',z,len(b),[(i.filename,i.file_size) for i in zf.infolist()])
+          PY
+          python3 p.py
