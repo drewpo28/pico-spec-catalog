@@ -7,30 +7,35 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
       - run: |
-          cat > p.py <<'PY'
-          import re, urllib.request, collections, io, zipfile
-          UA={'User-Agent':'Mozilla/5.0 (X11; Linux x86_64) Chrome/124 Safari/537.36'}
-          def get(u):
-              return urllib.request.urlopen(urllib.request.Request(u,headers=UA),timeout=60).read()
-          ext=collections.Counter(); rows=0; zips=[]; multi=0
-          for L in '0abcdefghijklmnopqrstuvwxyz':
-              h=get(f'https://www.rzxarchive.co.uk/{L}.php').decode('utf-8','replace')
-              trs=re.split(r'(?i)<tr>',h)
-              n=0
-              for t in trs:
-                  if 'Download' not in t or 'NAME=' not in t.upper(): continue
-                  n+=1
-                  dl=re.findall(r'(?i)href="([^"]+\.(?:rzx|zip))"',t)
-                  for d in dl: ext[d.rsplit('.',1)[1].lower()]+=1
-                  if len(dl)>1: multi+=1
-                  zips+= [d for d in dl if d.lower().endswith('.zip')]
-                  if L in '0a' and n<=25 or (len(dl)>1 and multi<=15):
-                      print('ROW',L,n,repr(t[:900])); print()
-              rows+=n; print('LETTER',L,n)
-          print('TOTAL rows',rows,'ext',ext,'multi',multi)
-          for z in zips[:4]:
-              b=get('https://www.rzxarchive.co.uk'+z if z.startswith('/') else 'https://www.rzxarchive.co.uk/'+z)
-              zf=zipfile.ZipFile(io.BytesIO(b)); print('ZIP',z,len(b),[(i.filename,i.file_size) for i in zf.infolist()])
+          python3 gen_static.py --out _site --site rzx --max-depth 4
+          cat _site/sites.tsv; cat _site/rzx/_root.tsv
+          for f in _site/rzx/*.tsv; do printf '%s %s\n' "$(wc -l < $f)" "$f"; done
+          echo "---- sample"; head -12 _site/rzx/0-9.tsv; head -5 _site/rzx/S.tsv
+          echo "---- zip"; grep -c '\.zip$' _site/rzx/*.tsv | tail -3
+          echo "---- longest names"; cut -f2 _site/rzx/*.tsv | awk '{print length, $0}' | sort -rn | head -5
+          echo "---- non-ascii"; cut -f2 _site/rzx/*.tsv | grep -cP '[^\x00-\x7F]' || true
+          echo "---- tls chain"; echo | openssl s_client -connect www.rzxarchive.co.uk:443 -servername www.rzxarchive.co.uk -showcerts 2>/dev/null | grep -E "s:|i:" | head -8
+          echo "---- http"; curl -sS -4 -o /dev/null -D - http://www.rzxarchive.co.uk/a/abc.rzx | head -5
+          echo "---- snapshot types (sample 60 .rzx)"
+          python3 - <<'PY'
+          import urllib.request, collections, random
+          lines=[l.split('\t') for f in ['A','B','S','T','M'] for l in open(f'_site/rzx/{f}.tsv') if l.startswith('F')]
+          rz=[l[3].strip() for l in lines if l[3].strip().endswith('.rzx')]
+          random.seed(1); c=collections.Counter()
+          for u in random.sample(rz,60):
+              b=urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':'Mozilla/5.0'}),timeout=60).read()
+              i=10; ext='none'; cre=''
+              while i+5<=len(b):
+                  bid=b[i]; ln=int.from_bytes(b[i+1:i+5],'little')
+                  if bid==0x10: cre=b[i+5:i+25].split(b'\0')[0].decode('latin1')
+                  if bid==0x30: ext=b[i+9:i+13].split(b'\0')[0].decode('latin1').upper(); break
+                  if ln<5: break
+                  i+=ln
+              c[(ext,cre)]+=1
+          for k,v in c.most_common(): print(v,k)
           PY
-          python3 p.py
