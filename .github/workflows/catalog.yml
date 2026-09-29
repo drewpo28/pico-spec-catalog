@@ -83,7 +83,9 @@ jobs:
           python3 gen_static.py \
             --out "$GITHUB_WORKSPACE/_site" $args \
             --max-files "$MAX_FILES" --max-depth "$MAX_DEPTH"
-          echo "== generated tree ==" && find "$GITHUB_WORKSPACE/_site" -type f | sort | head -50
+          # sed reads to EOF, so sort never hits a closed pipe (head -50 did)
+          echo "== generated tree ==" && find "$GITHUB_WORKSPACE/_site" -type f | sort | sed -n '1,50p'
+          echo "($(find "$GITHUB_WORKSPACE/_site" -type f | wc -l) files total)"
       - name: Save sp3 page cache
         if: always()          # a crawl that died half-way still cached what it read
         uses: actions/cache/save@v4

@@ -26,9 +26,8 @@ Everything below was checked against the live site (2026-09-27):
     the device names the saved file — i.e. learns the FORMAT — after the
     locator's last path segment, the s4e/tosec/vgm trick. So the tree is
     link-mode: listings only on Pages, the device fetches from zxtunes.com.
-  - the site also carries formats the firmware cannot play (.vtx, .asc, .psc,
-    .psg, ...); only PLAYABLE ones are listed, and an author left with none is
-    dropped.
+  - the site also carries formats the firmware cannot play (.psg, .asc0, ...);
+    only PLAYABLE ones are listed, and an author left with none is dropped.
 
 Display names follow the site's own track row, "<file> - <title>": the file
 name alone is often an 8.3 stub ("hnyear") and the title alone the module's
@@ -56,6 +55,7 @@ AUTHOR_URL = SITE + "/ru/authors/{slug}"
 # What Pico-Zx-Player plays (pico-speccy src/player/PicoPlayer.cpp playableExt).
 PLAYABLE = {
     "pt3", "pt2", "stc", "stp", "sqt", "ay",          # AY
+    "psc", "pt1", "asc", "ftc", "fls", "gtr", "fxm", "psm", "zxs", "stp2", "vtx",
     "tfc", "tfd", "tfe",                              # TurboSound FM
     "etc", "saa", "cop", "sng",                       # SAA1099
     "vgm", "vgz", "mp3",
