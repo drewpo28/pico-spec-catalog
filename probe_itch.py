@@ -1,5 +1,5 @@
 import httpx, re, json, sys, io, zipfile, collections
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, quote
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
 c = httpx.Client(headers=UA, follow_redirects=True, timeout=60)
 P = lambda *a: (print(*a), sys.stdout.flush())
@@ -15,6 +15,14 @@ def uploads_of(p):
         out.append((uid.group(1) if uid else None, nm.group(1) if nm else "?", sz.group(1) if sz else "?"))
     return out
 def get_file(base, uid, csrf, key=None):
+    if True:
+        prm = {"source": "game_download"} if key else {"source": "view_game", "as_props": "1", "after_download_lightbox": "1"}
+        if key: prm["key"] = key
+        r = c.post(f"{base}/file/{uid}", params=prm, data={"csrf_token": csrf})
+        if "url" not in r.text and key:
+            r = c.post(f"{base}/download/{quote(key, safe='')}/file/{uid}", params={"source":"game_download"}, data={"csrf_token": csrf})
+        try: return r.json()
+        except Exception: return {"status": r.status_code, "text": r.text[:300]}
     q = f"{base}/file/{uid}?key={key}&source=game_download" if key else f"{base}/file/{uid}?source=view_game&as_props=1&after_download_lightbox=1"
     r = c.post(q, data={"csrf_token": csrf})
     try: return r.json()
@@ -32,10 +40,13 @@ for m in re.finditer(r"(upload_id|GameDownload|download_btn|new I\.\w+)", dp):
     break
 for m in re.finditer(r"new I\.\w+\([^<]{0,600}", dp): P("  init:", m.group(0)[:600])
 j = None
-for q in [f"{base}/file/{ups[0][0]}?key={key}&source=game_download",
-          f"{base}/file/{ups[0][0]}?key={key}&source=game_download&after_download_lightbox=1",
-          f"{base}/file/{ups[0][0]}?source=game_download&key={du.rsplit('/',1)[1]}"]:
-    r = c.post(q, data={"csrf_token": csrf_of(dp)}); P("  try", q[-80:], r.status_code, r.text[:200])
+tries = [("POST", f"{base}/file/{ups[0][0]}", {"key": key, "source": "game_download"}),
+         ("POST", f"{du}/file/{ups[0][0]}", {"source": "game_download"}),
+         ("POST", f"{base}/file/{ups[0][0]}", {"source": "game_download"}),
+         ("GET",  f"{base}/file/{ups[0][0]}", {"key": key, "source": "game_download"})]
+for meth, q, prm in tries:
+    r = c.request(meth, q, params=prm, data={"csrf_token": csrf_of(dp)} if meth=="POST" else None)
+    P("  try", meth, q[-60:], prm, r.status_code, r.text[:200])
     try:
         if "url" in r.json(): j = r.json(); break
     except Exception: pass
