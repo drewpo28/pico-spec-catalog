@@ -15,7 +15,7 @@ def uploads_of(p):
         out.append((uid.group(1) if uid else None, nm.group(1) if nm else "?", sz.group(1) if sz else "?"))
     return out
 def get_file(base, uid, csrf, key=None):
-    q = f"{base}/file/{uid}?source=game_download" + (f"&key={key}" if key else "") if key else f"{base}/file/{uid}?source=view_game&as_props=1&after_download_lightbox=1"
+    q = f"{base}/file/{uid}?key={key}&source=game_download" if key else f"{base}/file/{uid}?source=view_game&as_props=1&after_download_lightbox=1"
     r = c.post(q, data={"csrf_token": csrf})
     try: return r.json()
     except Exception: return {"status": r.status_code, "text": r.text[:300]}
@@ -27,8 +27,22 @@ du = c.post(base + "/download_url", data={"csrf_token": csrf_of(p)}).json()["url
 key = unquote(du.rsplit("/", 1)[1])
 dp = c.get(du).text
 ups = uploads_of(dp); P("DB download page uploads", ups)
-j = get_file(base, ups[0][0], csrf_of(dp), key); P("DB file json", j)
-x = c.get(j["url"]); P("xlsx", x.status_code, len(x.content), str(x.url)[:160])
+for m in re.finditer(r"(upload_id|GameDownload|download_btn|new I\.\w+)", dp):
+    P("  ctx:", dp[max(0,m.start()-200):m.end()+300].replace("\n"," "))
+    break
+for m in re.finditer(r"new I\.\w+\([^<]{0,600}", dp): P("  init:", m.group(0)[:600])
+j = None
+for q in [f"{base}/file/{ups[0][0]}?key={key}&source=game_download",
+          f"{base}/file/{ups[0][0]}?key={key}&source=game_download&after_download_lightbox=1",
+          f"{base}/file/{ups[0][0]}?source=game_download&key={du.rsplit('/',1)[1]}"]:
+    r = c.post(q, data={"csrf_token": csrf_of(dp)}); P("  try", q[-80:], r.status_code, r.text[:200])
+    try:
+        if "url" in r.json(): j = r.json(); break
+    except Exception: pass
+P("DB file json", j)
+x = c.get(j["url"]) if j else None
+if not x: sys.exit(0)
+x = x; P("xlsx", x.status_code, len(x.content), str(x.url)[:160])
 import openpyxl
 wb = openpyxl.load_workbook(io.BytesIO(x.content), data_only=False)
 games = []
