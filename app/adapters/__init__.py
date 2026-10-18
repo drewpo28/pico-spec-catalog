@@ -53,6 +53,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "zxtunes":
             from .zxtunes import ZxtunesAdapter  # lazy (httpx) — zxtunes.com AY music by author
             reg["zxtunes"] = ZxtunesAdapter()
+        elif sid == "nextdb":
+            from .nextdb import NextDbAdapter    # lazy (httpx, openpyxl) — free Next releases on itch.io
+            reg["nextdb"] = NextDbAdapter()
     return reg
 
 
