@@ -168,6 +168,18 @@ def pick_uploads(ups: list[tuple[str, str, int]]) -> list[tuple[str, str, int]]:
     return [u for u in cand if _ext(u[1]) not in TAPE_EXT or NEXT_WORD.search(u[1])]
 
 
+def _member_name(i: "zipfile.ZipInfo") -> str:
+    """A member's name as the device's unzip writes it: '/' separators, and a
+    name without the UTF-8 flag read as CP866 (zipfile assumes CP437)."""
+    n = i.filename
+    if not i.flag_bits & 0x800:
+        try:
+            n = n.encode("cp437").decode("cp866")
+        except UnicodeError:
+            pass
+    return n.replace("\\", "/")
+
+
 def run_members(names: list[str]) -> list[str]:
     """The members of an archive worth launching, shallowest level only.
 
@@ -340,7 +352,7 @@ class NextDbAdapter(Adapter):
                 if total <= 0:
                     raise RuntimeError("no Content-Range")
                 with zipfile.ZipFile(RangeFile(getter, total)) as zf:
-                    info["run"] = run_members(zf.namelist())
+                    info["run"] = run_members([_member_name(i) for i in zf.infolist()])
             elif _ext(info["file"]) in RUN_EXT or _ext(info["file"]) in TAPE_EXT:
                 info["run"] = [""]
         except Exception as e:  # noqa: BLE001 — one bad upload is not a dead site
@@ -415,7 +427,7 @@ class NextDbAdapter(Adapter):
                     # (when it holds several): "Next Jumble 003", "EN_Mortadelo.nex".
                     parts = []
                     if n_up > 1:
-                        parts.append(_text(shown or fname))
+                        parts.append(re.sub(r"\.zip$", "", _text(shown or fname), flags=re.I))
                     if n_run > 1 and member:
                         parts.append(_text(member.rsplit("/", 1)[-1]))
                     name = " - ".join(parts) or title
