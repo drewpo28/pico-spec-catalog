@@ -94,6 +94,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "zxtunes":
         from app.adapters.zxtunes import ZxtunesAdapter  # lazy (needs httpx)
         return ZxtunesAdapter()
+    if site == "nextdb":
+        from app.adapters.nextdb import NextDbAdapter  # lazy (needs httpx, openpyxl)
+        return NextDbAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 
