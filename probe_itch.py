@@ -1,5 +1,5 @@
 import httpx, re, json, sys, io, zipfile, collections
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
 c = httpx.Client(headers=UA, follow_redirects=True, timeout=60)
 P = lambda *a: (print(*a), sys.stdout.flush())
@@ -24,7 +24,7 @@ def get_file(base, uid, csrf, key=None):
 base = "https://leonisx.itch.io/zx-spectrum-next-db"
 p = c.get(base).text
 du = c.post(base + "/download_url", data={"csrf_token": csrf_of(p)}).json()["url"]
-key = du.rsplit("/", 1)[1]
+key = unquote(du.rsplit("/", 1)[1])
 dp = c.get(du).text
 ups = uploads_of(dp); P("DB download page uploads", ups)
 j = get_file(base, ups[0][0], csrf_of(dp), key); P("DB file json", j)
@@ -80,7 +80,7 @@ for url in sample[:14]:
             d = c.post(url + "/download_url", data={"csrf_token": cs}).json()
             P("   download_url ->", d)
             if "url" in d:
-                k = d["url"].rsplit("/",1)[1]; dp = c.get(d["url"]).text; target = uploads_of(dp); cs = csrf_of(dp)
+                k = unquote(d["url"].rsplit("/",1)[1]); dp = c.get(d["url"]).text; target = uploads_of(dp); cs = csrf_of(dp)
                 P("   keyed uploads:", target[:8])
         except Exception as e: P("   dl err", e)
     for uid, nm, sz in target[:3]:
