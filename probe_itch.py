@@ -1,10 +1,9 @@
-import httpx, re, json, sys, io, zipfile, collections
-from urllib.parse import urlparse, unquote, quote
+import httpx, re, sys, io, zipfile, collections, time
+from urllib.parse import unquote
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
 c = httpx.Client(headers=UA, follow_redirects=True, timeout=60)
 P = lambda *a: (print(*a), sys.stdout.flush())
-def csrf_of(p):
-    m = re.search(r'<meta name="csrf_token" value="([^"]+)"', p); return m.group(1) if m else ""
+csrf_of = lambda p: (re.search(r'<meta name="csrf_token" value="([^"]+)"', p) or [None, ""])[1]
 def uploads_of(p):
     out = []
     for m in re.finditer(r'<div class="upload">(.*?)</div>\s*</div>', p, re.S):
@@ -14,108 +13,70 @@ def uploads_of(p):
         sz = re.search(r'class="file_size"[^>]*><span>([^<]*)<', b)
         out.append((uid.group(1) if uid else None, nm.group(1) if nm else "?", sz.group(1) if sz else "?"))
     return out
-def get_file(base, uid, csrf, key=None):
-    if True:
-        prm = {"source": "game_download"} if key else {"source": "view_game", "as_props": "1", "after_download_lightbox": "1"}
-        if key: prm["key"] = key
-        r = c.post(f"{base}/file/{uid}", params=prm, data={"csrf_token": csrf})
-        if "url" not in r.text and key:
-            r = c.post(f"{base}/download/{quote(key, safe='')}/file/{uid}", params={"source":"game_download"}, data={"csrf_token": csrf})
-        try: return r.json()
-        except Exception: return {"status": r.status_code, "text": r.text[:300]}
-    q = f"{base}/file/{uid}?key={key}&source=game_download" if key else f"{base}/file/{uid}?source=view_game&as_props=1&after_download_lightbox=1"
-    r = c.post(q, data={"csrf_token": csrf})
-    try: return r.json()
-    except Exception: return {"status": r.status_code, "text": r.text[:300]}
-
-# ---- 1. the DB xlsx
-base = "https://leonisx.itch.io/zx-spectrum-next-db"
-p = c.get(base).text
-du = c.post(base + "/download_url", data={"csrf_token": csrf_of(p)}).json()["url"]
-key = unquote(du.rsplit("/", 1)[1])
-dp = c.get(du).text
-ups = uploads_of(dp); P("DB download page uploads", ups)
-for m in re.finditer(r"(upload_id|GameDownload|download_btn|new I\.\w+)", dp):
-    P("  ctx:", dp[max(0,m.start()-200):m.end()+300].replace("\n"," "))
-    break
-for m in re.finditer(r"new I\.\w+\([^<]{0,600}", dp): P("  init:", m.group(0)[:600])
-j = None
-tries = [("POST", f"{base}/file/{ups[0][0]}", {"key": key, "source": "game_download"}),
-         ("POST", f"{du}/file/{ups[0][0]}", {"source": "game_download"}),
-         ("POST", f"{base}/file/{ups[0][0]}", {"source": "game_download"}),
-         ("GET",  f"{base}/file/{ups[0][0]}", {"key": key, "source": "game_download"})]
-for meth, q, prm in tries:
-    r = c.request(meth, q, params=prm, data={"csrf_token": csrf_of(dp)} if meth=="POST" else None)
-    P("  try", meth, q[-60:], prm, r.status_code, r.text[:200])
-    try:
-        if "url" in r.json(): j = r.json(); break
-    except Exception: pass
-P("DB file json", j)
-x = c.get(j["url"]) if j else None
-if not x: sys.exit(0)
-x = x; P("xlsx", x.status_code, len(x.content), str(x.url)[:160])
+# 1. csrf / cookie necessity, R2 headers
+g = "https://pepperfriesgames.itch.io/tetranex"; uid = "18940718"
+for label, cl, data in [("fresh client, no csrf", httpx.Client(headers=UA), {}),
+                        ("fresh client, bogus csrf", httpx.Client(headers=UA), {"csrf_token": "x"})]:
+    r = cl.post(f"{g}/file/{uid}", params={"source": "game_download"}, data=data)
+    P(label, r.status_code, r.headers.get("content-type"), r.headers.get("content-length"), r.headers.get("transfer-encoding"), r.text[:180])
+cl = httpx.Client(headers=UA)
+r = cl.post(f"{g}/file/{uid}", params={"source": "game_download"}, data={"csrf_token": ""})
+u = re.search(r'"url":"([^"]+)"', r.text)
+if u:
+    u = u.group(1).replace("\\/", "/")
+    h = cl.get(u); P("R2", h.status_code, dict((k, v) for k, v in h.headers.items() if k.lower() in ("content-length","content-type","content-disposition","transfer-encoding","server")), len(h.content))
+# 2. the whole Games/Demos sheets
+du = c.post("https://leonisx.itch.io/zx-spectrum-next-db/download_url", data={"csrf_token": csrf_of(c.get("https://leonisx.itch.io/zx-spectrum-next-db").text)}).json()["url"]
+dp = c.get(du).text; xu = uploads_of(dp)[0][0]
+j = c.post("https://leonisx.itch.io/zx-spectrum-next-db/file/" + xu, params={"source": "game_download"}, data={"csrf_token": csrf_of(dp)}).json()
 import openpyxl
-wb = openpyxl.load_workbook(io.BytesIO(x.content), data_only=False)
-games = []
-for ws in wb.worksheets:
-    P(f"=== sheet '{ws.title}' rows={ws.max_row} cols={ws.max_column}")
-    for r_i, row in enumerate(ws.iter_rows(min_row=1, max_row=6), 1):
-        vals = []
-        for cell in row:
-            v = cell.value
-            h = cell.hyperlink.target if cell.hyperlink else None
-            vals.append(f"{v!r}" + (f" <{h}>" if h else ""))
-        P(f"  r{r_i}:", " | ".join(vals)[:900])
-    # collect hyperlinks
-    hl = collections.Counter()
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.hyperlink and cell.hyperlink.target:
-                hl[urlparse(cell.hyperlink.target).netloc.split(".",1)[-1] if "itch.io" in cell.hyperlink.target else urlparse(cell.hyperlink.target).netloc] += 1
-    P("  link hosts:", hl.most_common(15))
-    # value distribution of every column with few distinct values
-    for col in ws.iter_cols(min_row=2):
-        vs = collections.Counter(str(c_.value) for c_ in col if c_.value is not None)
-        if 1 < len(vs) <= 25: P(f"  col {col[0].column_letter}: {vs.most_common(25)}")
-    if ws.title.lower().startswith("game"):
-        for row in ws.iter_rows(min_row=2):
-            itch = [cl.hyperlink.target for cl in row if cl.hyperlink and "itch.io" in (cl.hyperlink.target or "")]
-            if itch: games.append(([cl.value for cl in row], itch[0]))
-P("games with itch links:", len(games))
-
-# ---- 2. sample game pages
-sample = ["https://pepperfriesgames.itch.io/tetranex", "https://7towersoftgames.itch.io/sokoback"]
-sample += [g[1] for g in games[:300:25]]
-for url in sample[:14]:
+wb = openpyxl.load_workbook(io.BytesIO(c.get(j["url"]).content))
+rows = []
+for sh in ("Games", "Demos", "Apps"):
+    ws = wb[sh]; hdr = [x.value for x in ws[2]]
+    pc = next(i for i, v in enumerate(hdr) if v == "£Digital"); tc = hdr.index("Title")
+    for row in ws.iter_rows(min_row=3):
+        cell = row[pc]; link = cell.hyperlink.target if cell.hyperlink else ""
+        rows.append((sh, row[tc].value, str(cell.value), link))
+pr = collections.Counter((sh, v.split(",")[0].strip() if v else v, "itch" if "itch.io" in l else "other") for sh, t, v, l in rows)
+for k, n in sorted(pr.items(), key=lambda x: -x[1])[:40]: P("price", k, n)
+cand = [r for r in rows if "itch.io" in r[3] and re.match(r"https?://[^/]+\.itch\.io/[^/?#]+/?$", r[3]) and (r[2].startswith("Free") or r[2].startswith("NYOP"))]
+P("candidates (Free/NYOP, itch game page):", len(cand), collections.Counter(r[0] for r in cand))
+ext = collections.Counter(); kinds = collections.Counter(); zipk = collections.Counter(); minp = collections.Counter()
+zips = 0
+for sh, title, price, link in cand:
+    if sh == "Apps": continue
     try:
-        r = c.get(url); p = r.text
+        p = c.get(link).text
     except Exception as e:
-        P("ERR", url, e); continue
-    price = re.search(r'class="(buy_btn|button buy_btn)[^"]*"[^>]*>([^<]*)', p)
-    pm = re.search(r'"offers":\{[^}]*\}', p)
+        P("ERR", link, e); continue
+    m = re.search(r'"min_price":(\d+)', p); mp = int(m.group(1)) if m else None
+    minp[mp] += 1
     ups = uploads_of(p)
-    P(f"\n### {url} {r.status_code} buy={price.group(2) if price else None} offers={pm.group(0) if pm else None}")
-    P("   direct uploads:", ups[:8])
-    if "download_url" in p or "purchase" in p and not ups:
-        P("   (has download_url/purchase path)")
-    cs = csrf_of(p)
-    target = ups; k = None
-    if not ups:
+    if ups and not ups[0][0] and mp == 0:
         try:
-            d = c.post(url + "/download_url", data={"csrf_token": cs}).json()
-            P("   download_url ->", d)
-            if "url" in d:
-                k = unquote(d["url"].rsplit("/",1)[1]); dp = c.get(d["url"]).text; target = uploads_of(dp); cs = csrf_of(dp)
-                P("   keyed uploads:", target[:8])
-        except Exception as e: P("   dl err", e)
-    for uid, nm, sz in target[:3]:
-        if not uid: continue
-        j = get_file(url, uid, cs, k); P("   file", uid, nm, sz, "->", str(j)[:260])
-        u = j.get("url") if isinstance(j, dict) else None
-        if u and nm.lower().endswith(".zip") and ("MB" not in sz or float(sz.split()[0]) < 30):
-            z = c.get(u); P("   got", z.status_code, len(z.content), "final", str(z.url)[:140])
+            d = c.post(link.rstrip("/") + "/download_url", data={"csrf_token": csrf_of(p)}).json()
+            if "url" in d: ups = uploads_of(c.get(d["url"]).text)
+        except Exception: pass
+    names = [n for _, n, _ in ups]
+    for n in names: ext[n.rsplit(".", 1)[-1].lower() if "." in n[-6:] else "(none)"] += 1
+    kinds["no uploads" if not ups else ("has uid" if ups[0][0] else "no uid")] += 1
+    line = f"{sh} | {title} | {price} | min={mp} | {link} | " + "; ".join(f"{n} [{s}]{'' if u else ' !uid'}" for u, n, s in ups[:6])
+    P(line[:400])
+    zu = [(u, n, s) for u, n, s in ups if u and n.lower().endswith(".zip") and ("kB" in s or ("MB" in s and float(s.split()[0]) < 8))]
+    if zu and zips < 60 and mp == 0:
+        zips += 1
+        r = c.post(link.rstrip("/") + "/file/" + zu[0][0], params={"source": "game_download"}, data={"csrf_token": csrf_of(p)})
+        um = re.search(r'"url":"([^"]+)"', r.text)
+        if um:
             try:
-                zf = zipfile.ZipFile(io.BytesIO(z.content))
-                names = zf.namelist(); P("   zip members", len(names))
-                for n in names[:40]: P("     ", n, zf.getinfo(n).file_size)
-            except Exception as e: P("   not zip", e)
+                zf = zipfile.ZipFile(io.BytesIO(c.get(um.group(1).replace("\\/", "/")).content))
+                nl = [n for n in zf.namelist() if not n.endswith("/")]
+                top = collections.Counter(n.rsplit(".", 1)[-1].lower() for n in nl if "." in n)
+                ent = [n for n in nl if n.lower().endswith((".nex", ".bas", ".snx", ".tap", ".sna", ".z80", ".bin"))]
+                k = ("nex" if any(n.lower().endswith(".nex") for n in nl) else "bas" if any(n.lower().endswith(".bas") for n in nl) else "other")
+                zipk[(k, len([e for e in ent if e.lower().endswith(('.nex','.bas'))]) > 1)] += 1
+                P(f"   ZIP {zu[0][1]}: {len(nl)} files, dirs={len(set(n.rsplit('/',1)[0] for n in nl if '/' in n))}, exts={dict(top.most_common(8))}, entries={ent[:6]}")
+            except Exception as e: P("   zip err", e)
+    time.sleep(0.4)
+P("min_price", minp); P("upload kinds", kinds); P("upload exts", ext.most_common(25)); P("zip kinds (entry, multiple)", zipk)
