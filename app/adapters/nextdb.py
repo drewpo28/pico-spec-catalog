@@ -33,6 +33,18 @@ and refreshed by hand. Everything below was checked from a GitHub runner on
     names without an extension (the real name is in the R2 Content-Disposition),
     pdf/txt manuals, other platforms' builds, sources, the odd .rar/.7z.
 
+The database misses many itch-only releases, so the free listings of the Next
+tags (TAGS; checked 2026-10-20: ~187 games, ~79 not in the database, ~57 of
+them runnable) are merged in. `<tag list>?page=N&format=json` answers
+{"page", "num_items", "content": <grid html>}, 36 cards a page. A card's
+attribute ORDER changes between responses, so cards are cut at their
+`game_cell` div and read by `data-label="game:<id>:title"` anchors, not by
+attribute position. The database wins for a page it lists (title, developer,
+sheet); a tag-only page goes to Demos when it carries a demo tag, else Games,
+and passes the same free check and upload pipeline — the noisy "next" tag
+needs no filter of its own, a page with nothing runnable lists nothing. A
+failed tag listing is only a warning; MIN_GAMES counts database rows alone.
+
 Per upload the adapter decides what the device should RUN:
   - .nex / .snx / .bas uploaded on their own: that file;
   - .zip: its central directory is read with HTTP Range requests (no full
@@ -69,6 +81,10 @@ from .base import Adapter, Entry, SourceDown, http_client
 
 DB_PAGE = "https://leonisx.itch.io/zx-spectrum-next-db"
 SHEETS = ("Games", "Demos")
+TAGS = ("zx-spectrum-next", "spectrum-next", "zx-next", "zxnext", "next")
+TAG_LIST = "https://itch.io/games/free/tag-{}"
+TAG_PAGE_SIZE = 36
+TAG_MAX_PAGES = 20
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
 
@@ -82,6 +98,19 @@ UPLOAD_NAME2 = re.compile(r'class="name"[^>]*>([^<]*)<')
 UPLOAD_SIZE = re.compile(r'class="file_size"[^>]*><span>([^<]*)<')
 PAGE_TITLE = re.compile(r'<meta property="og:title" content="([^"]*)"|<title>([^<]*)</title>')
 DISPO = re.compile(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', re.I)
+
+# Tag listings: one card per `game_cell` div, attributes in any order.
+CARD_SPLIT = re.compile(r'<div[^>]*class="game_cell ')
+CARD_TITLE = re.compile(r'<a [^>]*data-label="game:\d+:title"[^>]*>([^<]*)<')
+CARD_AUTHOR = re.compile(r'class="game_author"[^>]*>\s*<a [^>]*>([^<]*)<')
+HREF = re.compile(r'href="([^"]+)"')
+PAGE_TAGS = re.compile(r'href="https://itch\.io/games/tag-([a-z0-9-]+)"')
+DEMO_TAGS = {"demo", "demoscene", "demoscene-production", "intro"}
+# "Humbug - ZX Next", "Infestation (ZX Spectrum Next)", "... - Spectrum Next".
+# Only after a separator: "Scramble Next" keeps its name.
+NEXT_SUFFIX = re.compile(
+    r"\s*(?:\(|-|–|—)\s*(?:for\s+)?(?:the\s+)?(?:zx\s+spectrum|zx|spectrum)\s+next"
+    r"(?:\s+edition)?\s*\)?\s*$", re.I)
 
 RUN_EXT = ("nex", "snx", "bas")
 TAPE_EXT = ("tap", "tzx")
@@ -140,6 +169,22 @@ def uploads_of(page: str) -> list[tuple[str | None, str, int]]:
         out.append((uid.group(1) if uid else None,
                     html.unescape(nm.group(1)).strip() if nm else "",
                     _size(sz.group(1)) if sz else 0))
+    return out
+
+
+def tag_cards(grid: str) -> list[tuple[str, str, str]]:
+    """(game page URL, title, author) per card of a tag listing's grid html."""
+    out = []
+    for cell in CARD_SPLIT.split(grid)[1:]:
+        a = CARD_TITLE.search(cell)
+        if not a:
+            continue
+        h = HREF.search(a.group(0))
+        if not h or not GAME_PAGE.match(h.group(1)):
+            continue
+        au = CARD_AUTHOR.search(cell)
+        title = NEXT_SUFFIX.sub("", _text(a.group(1))) or _text(a.group(1))
+        out.append((h.group(1).rstrip("/"), title, _text(au.group(1)) if au else ""))
     return out
 
 
@@ -319,13 +364,38 @@ class NextDbAdapter(Adapter):
                 link = (cell.hyperlink.target or "").strip() if cell.hyperlink else ""
                 if not (price.startswith("Free") or price.startswith("NYOP")):
                     continue
-                if not GAME_PAGE.match(link) or "leonisx.itch.io" in link:
+                if not GAME_PAGE.match(link) or link.rstrip("/") == DB_PAGE:
                     continue
                 title = _text(row[tc].value)
                 if not title:
                     continue
                 dev = _text(row[dc].value) if dc is not None else ""
                 out.append((sheet, title, dev, link.rstrip("/")))
+        return out
+
+    def _tag_rows(self, known: set[str]) -> list[tuple[None, str, str, str]]:
+        """(None, title, author, game page URL) for every free page under TAGS
+        that `known` (lower-cased database pages) does not list. The sheet is
+        decided once the page itself is read."""
+        out, seen = [], set(known) | {DB_PAGE.lower()}
+        for tag in TAGS:
+            n = 0
+            try:
+                for p in range(1, TAG_MAX_PAGES + 1):
+                    r = self._req("GET", TAG_LIST.format(tag), params={"page": p, "format": "json"})
+                    j = r.json()
+                    cards = tag_cards(j.get("content") or "")
+                    for page, title, dev in cards:
+                        if page.lower() in seen:
+                            continue
+                        seen.add(page.lower())
+                        out.append((None, title, dev, page))
+                        n += 1
+                    if int(j.get("num_items") or 0) < TAG_PAGE_SIZE:
+                        break
+            except Exception as e:  # noqa: BLE001 — the tags only add to the database
+                print(f"  ! nextdb: tag {tag}: {e}")
+            print(f"  nextdb tag {tag}: {n} new pages")
         return out
 
     # ── one upload ──────────────────────────────────────────────────────────
@@ -373,12 +443,13 @@ class NextDbAdapter(Adapter):
         if self._tree is not None:
             return self._tree
         rows = self._rows()
+        rows += self._tag_rows({r[3].lower() for r in rows})
         per_page: dict[tuple[str, str], int] = {}
         for sheet, _, _, page in rows:
             per_page[(sheet, page)] = per_page.get((sheet, page), 0) + 1
         tree: dict[str, list[Entry]] = {}
         seen_page: set[tuple[str, str]] = set()
-        games = 0
+        games = tagged = 0
         for sheet, title, dev, page in rows:
             if (sheet, page) in seen_page:      # one itch page, several sheet rows
                 continue                        # (Nexter issues list each game)
@@ -399,6 +470,9 @@ class NextDbAdapter(Adapter):
             m = MIN_PRICE.search(html_text)
             if not m or int(m.group(1)) != 0:
                 continue                        # not free after all
+            from_db = sheet is not None
+            if not from_db:                     # a tag-only page
+                sheet = "Demos" if DEMO_TAGS & set(PAGE_TAGS.findall(html_text)) else "Games"
             ups = uploads_of(html_text)
             if ups and not all(u[0] for u in ups):
                 ups = self._keyed_uploads(page, html_text) or ups
@@ -439,8 +513,12 @@ class NextDbAdapter(Adapter):
                 tree.setdefault(parent, []).append(Entry(is_dir=False, name=name, size=size, url=loc))
             if many:
                 tree.setdefault(base, []).append(Entry(is_dir=True, name=title))
-            games += 1
+            if from_db:
+                games += 1
+            else:
+                tagged += 1
         self._save_cache()
+        print(f"  nextdb: {games} games from the database, {tagged} from tags")
         if games < MIN_GAMES:
             raise SourceDown(f"nextdb: only {games} games resolved — database or itch changed?")
         for k in tree:
