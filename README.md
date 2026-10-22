@@ -77,7 +77,7 @@ curl -OJ 'http://localhost:8080/v1/get?site=vtrd&path=A&name=<file>'
 ## Adapters (`app/adapters/`)
 
 Enable sources with `CATALOG_SITES` (comma/space list; code default `vtrd`, the
-Action builds `vtrd sc wos zxart s4e sp3 alf tosec tslabs atm vgm zxtunes rzx nextdb`). The order is the order shown in the device picker.
+Action builds `vtrd sc wos zxart s4e sp3 alf tosec tslabs atm vgm zxtunes rzx nextdb sam`). The order is the order shown in the device picker.
 
 | id      | source                       | how |
 |---------|------------------------------|-----|
@@ -95,6 +95,7 @@ Action builds `vtrd sc wos zxart s4e sp3 alf tosec tslabs atm vgm zxtunes rzx ne
 | `zxtunes` | [zxtunes.com](https://zxtunes.com/authors_list.php) | AY/YM music as `<author>/<track>` (≈977 authors). The author list is ONE page (`authors_list.php?lm=<N>` with N ≥ the total); every author page embeds its whole playlist as JSON (`#zxtunes-player-config`, one object per sub-song — a multi-song `.ay` is merged back into one entry, the device's player walks the sub-songs itself). Only formats pico-speccy's Pico-Zx-Player plays are listed (PT3/PT2/STC/STP/SQT/AY/TFC/…; `.vtx`/`.asc`/`.psc` are skipped) and an author left with none is dropped. Names follow the site's own row, `<file> - <title>`. **Direct links** (`downloads.php?id=N&fn=/<name>.<ext>` — the `&fn=` tail names the saved file, verified byte-identical); no anti-bot wall. The device plays them in the player: Enter = from this track, F2 on an author = the whole author, Auto/Shuffle walk the folder (pico-speccy firmware with the player's remote playlist). Build-time requests are spaced by `ZXTUNES_REQ_GAP` (0.5 s): ~8 min for the full crawl; `ZXTUNES_MAX_AUTHORS` caps it for tests |
 | `rzx`   | [The RZX Archive](https://www.rzxarchive.co.uk/) | Walkthrough input recordings (.rzx, ≈4050) as `<letter>/<recording>` (`0-9`, `A`–`Z`), shown as `TITLE .RZX  SUBMITTER  NOTE`. HTML scrape of the 27 letter pages (`0.php`, `a.php`…`z.php`, PHP tables with no CSS classes): a row is keyed on its `/<l>/<file>.(rzx\|zip)` download link, the three cells read in order. **Direct links** — ≈860 entries are `.zip` bundles (one recording per level, sometimes an intro/ending), which the device unzips itself. Needs the pico-speccy firmware with RZX playback (2026-09); recordings whose embedded snapshot is SZX are listed but not playable there yet. Requests spaced by `RZX_REQ_GAP` (0.5 s) |
 | `nextdb` | [ZX Spectrum Next Database](https://leonisx.itch.io/zx-spectrum-next-db) (Leonis) | Free ZX Spectrum Next games and demos on itch.io as `Games\|Demos/<letter>/<entry>` (a game with several runnable variants gets its own folder). The list is the database's `.xlsx` (sheets Games and Demos, `£Digital` = `Free*`/`NYOP` with an itch.io page link); each page must report `min_price` 0. **itch.io gives no stable link** — `POST <page>/file/<upload_id>` returns a signed URL valid for 60 s — so the locator is `itch:<host>/<slug>/<upload_id>/<file>[?run=<member>]` and the device does the POST itself. Zip archives are read with HTTP Range (central directory only); the runnable member (`.nex`, else `.bas`, else `.tap`, shallowest level) goes into `?run=`, and the device unpacks the whole archive to `/tmp/next/` and runs it there through NextZXOS. Nothing is mirrored. Per-upload results cached in `NEXTDB_CACHE`; requests spaced by `NEXTDB_REQ_GAP` (0.4 s). Needs the pico-speccy firmware with `itch:` locators and a booted NextZXOS |
+| `sam`   | [World of SAM](https://www.worldofsam.org/) | SAM Coupé software as `Games\|Demos\|Utilities/<letter>/<release>` (`0-9`, `A`–`Z`, the site's own buckets), shown as `TITLE (YEAR)  AUTHOR [variant]`. HTML scrape of a Drupal site: the three shelves are one paged view (`/products?field_category_target_id=3\|4\|5&page=N`, ≈460 releases → ≈425 files), each row keyed on its `/products/<slug>` title link with author, publisher and year read off the following cells; every release's detail page is then read for its Download field — Drupal's file formatter, an `<a href=".../system/files/....mgt" type="application/octet-stream; length=N">`, so the parser keys on a worldofsam.org file link with a disk-image extension and takes the size from `length=`. Formats: `.mgt`/`.sad` (SAM disks) and `.dsk` (EDSK with SAM geometry). Some 40 releases are `.zip` bundles: their central directory is read with HTTP Range requests and the zip is listed only when it holds a disk or tape member (`.mgt`/`.sad`/`.dsk`/`.tzx`/`.tap`) the device can unzip and run; bundles of PC tools, sources or a 256 MB `.hdf` are dropped. A release whose copyright holder declined shows a padlock and no link (about a third of the Games) and is skipped, as are the `Download-not-applicable.txt` placeholders; the fourth menu item, *Missing In Action!*, lists releases the archive has no file for and is not exposed. **Direct links** — percent-encoded upload names (`Wizard%20Demo%20%28…%29.mgt`) get the `?fn=/<ascii-name>` tail so the device saves a clean file name (Drupal ignores the query string, verified byte-identical). Requests spaced by `SAM_REQ_GAP` (0.5 s), ≈490 a night. Needs the pico-speccy firmware with the SAM Coupé core (`.mgt`/`.sad`/SAM `.dsk` in Drive 1/2); pico-spec has no SAM core and does not list this source |
 Add a new archive by implementing `Adapter.list()` / `Adapter.fetch()` (see
 `app/adapters/base.py`) and registering it in `app/adapters/__init__.py` — the
 firmware needs no changes. `gen_static.py` reuses the **same adapters** as the
@@ -179,6 +180,7 @@ python3 gen_static.py --out _site --site tosec
 python3 gen_static.py --out _site --site tslabs
 python3 gen_static.py --out _site --site atm
 python3 gen_static.py --out _site --site vgm
+python3 gen_static.py --out _site --site sam
 # _site/ is the Pages root; sites.tsv + per-site trees live there.
 ```
 
@@ -192,7 +194,7 @@ This repo **is** the dedicated catalog, so deployment is just enabling Pages:
 1. Push this repo to GitHub (`drewpo28/pico-spec-catalog`).
 2. **Settings → Pages → Source: GitHub Actions**.
 3. **Actions → Build catalog (Pages) → Run workflow** (or wait for the daily cron
-   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart s4e sp3 alf tosec tslabs atm vgm zxtunes rzx nextdb"`, `MAX_FILES=400`,
+   at 04:17 UTC). It runs `gen_static.py` (`SITES="vtrd sc wos zxart s4e sp3 alf tosec tslabs atm vgm zxtunes rzx nextdb sam"`, `MAX_FILES=400`,
    `MAX_DEPTH=4` by default) and deploys `_site/` to Pages.
 4. The catalog is then live at `https://drewpo28.github.io/pico-spec-catalog/` — which
    is the device's built-in default (`catalog_host` empty).

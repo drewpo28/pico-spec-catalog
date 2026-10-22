@@ -97,6 +97,9 @@ def build_adapter(site: str) -> Adapter:
     if site == "nextdb":
         from app.adapters.nextdb import NextDbAdapter  # lazy (needs httpx, openpyxl)
         return NextDbAdapter()
+    if site == "sam":
+        from app.adapters.sam import SamAdapter        # lazy (needs httpx)
+        return SamAdapter()
     raise SystemExit(f"unknown site: {site}")
 
 

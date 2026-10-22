@@ -56,6 +56,9 @@ def build_registry() -> "dict[str, Adapter]":
         elif sid == "nextdb":
             from .nextdb import NextDbAdapter    # lazy (httpx, openpyxl) — free Next releases on itch.io
             reg["nextdb"] = NextDbAdapter()
+        elif sid == "sam":
+            from .sam import SamAdapter          # lazy (httpx) — worldofsam.org SAM Coupé disks
+            reg["sam"] = SamAdapter()
     return reg
 
 
