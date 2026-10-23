@@ -57,9 +57,10 @@ Built once per catalog run (cron Action), so the ~200 API calls are amortised.
 from __future__ import annotations
 
 import html
+import re
 import sys
 import time
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 
 from .base import Adapter, Entry, http_client
@@ -129,6 +130,35 @@ def _tail(tags: set[str]) -> str:
     """`[48K|128K|AY]` for the machine + sound tags present, '' when none."""
     labels = sorted({_LABEL[t] for t in tags if t in _LABEL}, key=_LABEL_ORDER.__getitem__)
     return f"[{'|'.join(labels)}]" if labels else ""
+
+
+_FN_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _device_url(url: str, rid: object = "", fmt: str = "") -> str:
+    """The release URL as the device must request it.
+
+    zxart's `file` comes with the upload name raw — spaces, brackets, quotes,
+    Cyrillic ("…/id:359109/FishBone Crew 20yo (2021) [TSConf][VDAC].zip", ≈5400
+    of ~69k links). The firmware sends absolute locators byte for byte, and
+    zxart's Apache answers a raw space with a 350-byte "400 Bad Request" page,
+    which the device then saved as the release. So the path is percent-encoded,
+    and since the device names the saved file after the locator's last
+    '/'-segment, an unsafe name also gets the `?fn=/<ascii-name>` tail the
+    other adapters use (zxart ignores the query string, and the name segment
+    too — verified byte-identical). A name with nothing ASCII left (Cyrillic)
+    becomes `zxart-<release id>`; one that lost its extension upstream (a few
+    are cut mid-name, "…РЕА%D") gets the release's format, so the device can
+    still tell what it is."""
+    head, _, name = url.rpartition("/")
+    name = unquote(name)
+    enc = f"{head}/{quote(name, safe='')}"
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not re.fullmatch(r"[A-Za-z0-9]{1,4}", ext):
+        stem, ext = name, (fmt or "").lower()
+    fn = _FN_UNSAFE.sub("_", stem).strip("_")[:60] or f"zxart-{rid}"
+    fn = f"{fn}.{ext}" if ext else fn   # case kept: RD12.ZIP needs no tail
+    return enc if fn == name else f"{enc}?fn=/{fn}"
 
 
 def _bucket(title: str) -> str:
@@ -313,7 +343,8 @@ class ZxartAdapter(Adapter):
                 or f"release {r.get('id')}"
             tags = frozenset(str(t).lower() for t in (r.get("hardwareRequired") or [])) \
                 | site_hw.get(int(r.get("id") or 0), frozenset())
-            by_prod.setdefault(pid, []).append((rank, name, size, url, tags))
+            dev = _device_url(url, r.get("id"), fmts[0] if fmts else "")
+            by_prod.setdefault(pid, []).append((rank, name, size, dev, tags))
         return by_prod
 
     @staticmethod
